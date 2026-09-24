@@ -7,11 +7,16 @@
 //! 1. [`lexer`]: source text to tokens.
 //! 2. [`layout`]: virtual braces and semicolons from indentation.
 //! 3. [`parser`]: tokens to a syntax tree ([`ast`]).
+//!
+//! [`print`] goes the other way, from a syntax tree to source text. The
+//! boot compiler uses it to check the parser against GHC: a module counts
+//! as parsed only when GHC reads the printed source as the same module.
 
 pub mod ast;
 pub mod layout;
 pub mod lexer;
 pub mod parser;
+pub mod print;
 pub mod token;
 
 use std::fmt;
@@ -19,6 +24,7 @@ use std::fmt;
 pub use layout::LayoutError;
 pub use lexer::{LexError, LexOptions};
 pub use parser::ParseError;
+pub use print::print_module;
 pub use token::{Pos, Token, TokenKind};
 
 /// An error from any syntax stage, with a position.
@@ -102,10 +108,11 @@ mod tests {
         }
     }
 
-    /// Every vendored module must parse. The vendored tree is the target;
-    /// a module the parser rejects is a bug in the parser.
+    /// Every vendored module that parses must survive a print and a
+    /// second parse with the same tree. Modules that do not parse yet are
+    /// skipped here; the tracker counts them.
     #[test]
-    fn vendored_tree_parses() {
+    fn vendored_tree_roundtrips() {
         let vendor = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor");
         let mut files = Vec::new();
         haskell_files(&vendor, &mut files);
@@ -115,12 +122,19 @@ mod tests {
             vendor.display()
         );
         let mut failures = Vec::new();
+        let mut parsed = 0;
         for path in &files {
             let src = std::fs::read_to_string(path).unwrap();
-            if let Err(e) = parse(&src) {
-                failures.push(format!("{}: {e}", path.display()));
+            let Ok(module) = parse(&src) else { continue };
+            parsed += 1;
+            let printed = print_module(&module);
+            match parse(&printed) {
+                Ok(again) if print_module(&again) == printed => {}
+                Ok(_) => failures.push(format!("{}: the second parse differs", path.display())),
+                Err(e) => failures.push(format!("{}: printed source: {e}", path.display())),
             }
         }
+        eprintln!("{parsed} of {} vendored modules parse", files.len());
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

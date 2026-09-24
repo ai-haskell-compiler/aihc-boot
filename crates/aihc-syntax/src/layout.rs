@@ -83,7 +83,20 @@ pub fn layout(tokens: Vec<Token>) -> Result<Vec<Token>, LayoutError> {
         let is_eof = tok.kind == TokenKind::Eof;
 
         if let TokenKind::Pragma(_) = tok.kind {
-            // Pragmas are comments for the layout rule.
+            // A pragma takes part in the `<n>` rule only: `{-# INLINE f #-}`
+            // on its own line is a declaration of the block. It never opens
+            // a block and never closes one through the parse-error rule.
+            if pos.line > prev_line {
+                if let Some(Context::Implicit { col: m, .. }) = stack.last() {
+                    if col == *m {
+                        out.push(Token {
+                            kind: TokenKind::VSemi,
+                            pos,
+                        });
+                    }
+                }
+                prev_line = pos.line;
+            }
             out.push(tok);
             continue;
         }
@@ -398,6 +411,18 @@ mod tests {
         assert_eq!(
             render("f = do\n  if a\n  then b\n  else c\n"),
             "{ f = do { if a ; then b ; else c } }"
+        );
+    }
+
+    #[test]
+    fn pragmas_are_block_items() {
+        assert_eq!(
+            render("f = 1\n{-# INLINE f #-}\ng = 2\n"),
+            "{ f = 1 ; {-# INLINE f #-} ; g = 2 }"
+        );
+        assert_eq!(
+            render("data T = T {-# UNPACK #-} !Int\n"),
+            "{ data T = T {-# UNPACK #-} ! Int }"
         );
     }
 
