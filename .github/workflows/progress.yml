@@ -20,11 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      # Build the boot compiler here once it exists, so M3-M7 are measured
-      # (boot.toml expects it at target/release/aihc-boot), e.g.:
-      # - run: nix develop --command cargo build --release
+      # Build the boot compiler, so the tracker measures M3-M7. The Nix
+      # build tests and lints it too, the same as `nix flake check`.
+      - name: Build the boot compiler
+        run: nix build .#aihc-boot
       - name: Measure progress
         run: nix develop .#tracker --command python3 scripts/progress.py --write
+        env:
+          AIHC_BOOT: result/bin/aihc-boot
       - name: Commit if changed
         run: |
           if git diff --quiet -- README.md progress/; then

@@ -121,11 +121,9 @@ M3–M7 read 0.
 
 ## Open decisions
 
-1. **Implementation language of aihc-boot.** The repository's `.gitignore`
-   is Rust's template, and the default compiler path assumes a Cargo build.
-   Writing it in a non-Haskell language makes aihc-boot a real bootstrap path
-   (no GHC needed); writing it in Haskell would allow reusing aihc's parser
-   but keep the GHC dependency. The tracker and this plan work with either.
+1. **Implementation language of aihc-boot: Rust.** Decided. A non-Haskell
+   implementation makes aihc-boot a real bootstrap path (no GHC needed).
+   See "Layout of the compiler" below.
 2. **Code generation target for M6/M7:** C (easiest to debug, portable), a
    bytecode interpreter (smallest, and slow may be fine for a one-off
    bootstrap build), or native code.
@@ -133,14 +131,35 @@ M3–M7 read 0.
    or back `Text` with `String` and accept the slower stage-1 compiler.
 4. **Whether `vector`/`primitive` become thin wrappers over `array`.**
 
+## Layout of the compiler
+
+The Rust workspace has one crate per stage, plus the binary:
+
+- `crates/aihc-syntax`: lexer, layout rule and parser. Its tests include
+  one that tokenizes every module under `vendor/`, so the lexer never
+  falls behind the target.
+- `crates/aihc-boot`: the `aihc-boot` binary. It implements the command
+  line contract above and reports every module as JSON. Failures carry
+  an `error` field and, when known, the `line` and `col` of the first
+  error, so `aihc-boot check --stage parse --package NAME` also shows
+  which construct to implement next.
+
+The crates have no third-party dependencies at present. Add a dependency
+only when it saves real work, because every crate in `Cargo.lock` is one
+more thing the Nix build has to fetch.
+
 ## Tooling
 
 - `nix develop` gives the full dev shell (Python for the scripts, GHC 9.12
-  and cabal as the reference compiler). `nix develop .#tracker` is the
+  and cabal as the reference compiler, cargo and rustc for aihc-boot). `nix develop .#tracker` is the
   small shell the scheduled workflow uses.
 - `scripts/vendor.py NAME` / `--all` fetches upstream sources into
   `vendor/` and records the version and baseline size in `vendor/lock.json`.
 - `scripts/progress.py` prints the report; `--write` updates the README and
   `progress/history.csv`. It records a new history row only when some number
   changed, so the daily run commits nothing on days without progress.
-- `nix flake check` runs the tracker on a clean checkout.
+- `cargo build --release` builds `target/release/aihc-boot`, the path the
+  tracker looks for. `cargo test` runs the unit tests.
+- `nix flake check` runs the tracker on a clean checkout, and builds,
+  tests, lints (`clippy`) and format-checks (`rustfmt`) the Rust
+  workspace.

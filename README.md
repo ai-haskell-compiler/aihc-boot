@@ -87,7 +87,10 @@ _Last change in progress: 2026-09-24. Boot compiler: not built yet (M3–M7 read
 ## Development
 
 ```bash
-nix develop                          # Python, GHC 9.12 and cabal
+nix develop                          # Python, GHC 9.12, cabal, cargo and rustc
+cargo build --release                # build target/release/aihc-boot
+cargo test                           # run the unit tests
+./target/release/aihc-boot check --stage parse --package aihc-cpp
 python3 scripts/progress.py          # print the progress report
 python3 scripts/progress.py --write  # update this README and the history
 python3 scripts/vendor.py deepseq    # vendor one package from boot.toml
