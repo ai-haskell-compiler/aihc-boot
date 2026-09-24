@@ -10,8 +10,30 @@
     systems = ["x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin"];
     forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-    # Just enough to run the progress tracker (used by the scheduled workflow).
-    trackerTools = pkgs: [pkgs.python3 pkgs.git pkgs.bash];
+    # The reference parser. `aihc-boot check --stage parse` runs it on the
+    # original module and on the module printed from aihc-boot's own syntax
+    # tree, and counts the module as parsed only when GHC's trees are equal.
+    ghcParse = pkgs: let
+      ghc = pkgs.haskell.compiler.ghc912;
+    in
+      pkgs.stdenv.mkDerivation {
+        pname = "ghc-parse";
+        version = "0.1.0";
+        src = ./tools/ghc-parse;
+        nativeBuildInputs = [ghc pkgs.makeWrapper];
+        buildPhase = ''
+          ghc -O -package ghc -package process -outputdir build -o ghc-parse GhcParse.hs
+        '';
+        installPhase = ''
+          install -D ghc-parse $out/bin/ghc-parse
+          wrapProgram $out/bin/ghc-parse --prefix PATH : ${ghc}/bin
+        '';
+      };
+
+    # Just enough to run the progress tracker (used by the scheduled
+    # workflow). The reference parser is part of it, because M3 counts
+    # modules through it.
+    trackerTools = pkgs: [pkgs.python3 pkgs.git pkgs.bash (ghcParse pkgs)];
 
     # The boot compiler itself. `cargoLock` reads the committed Cargo.lock,
     # so the build is reproducible and works without network access.
@@ -57,6 +79,7 @@
     packages = forAllSystems (pkgs: {
       default = aihcBoot pkgs;
       aihc-boot = aihcBoot pkgs;
+      ghc-parse = ghcParse pkgs;
     });
 
     apps = forAllSystems (pkgs: {

@@ -1,11 +1,11 @@
 //! The parser: tokens (after layout) to a syntax tree.
 //!
 //! This is a recursive descent parser over the token stream of
-//! [`crate::tokenize`]. It handles the module header, the export list and
-//! the imports. Every top-level declaration is still an opaque token run;
-//! see [`Decl::Unparsed`].
+//! [`crate::tokenize`]. This module handles the module header, the export
+//! list and the imports. The `types` and `decls` modules handle the rest.
+//! Nothing is skipped: a construct the parser does not know is an error.
 
-use crate::ast::{Decl, Export, Import, ImportItem, Module, QName, Subs};
+use crate::ast::{Export, Import, ImportItem, Module, QName, Qualified, Subs};
 use crate::token::{Keyword, Pos, ReservedOp, Token, TokenKind};
 use std::fmt;
 
@@ -36,7 +36,7 @@ pub fn parse_module(tokens: &[Token]) -> Result<Module> {
     Ok(module)
 }
 
-struct Parser<'a> {
+pub(crate) struct Parser<'a> {
     tokens: &'a [Token],
     idx: usize,
 }
@@ -269,7 +269,7 @@ impl<'a> Parser<'a> {
         }
         let mut decls = Vec::new();
         while !self.at_close_block(explicit) {
-            decls.push(self.decl()?);
+            decls.push(self.decl(decls::DeclContext::TopLevel)?);
             if !self.semis() {
                 break;
             }
@@ -399,7 +399,11 @@ impl<'a> Parser<'a> {
             }
             self.bump();
         }
-        let mut qualified = self.eat_varid("qualified");
+        let mut qualified = if self.eat_varid("qualified") {
+            Qualified::Pre
+        } else {
+            Qualified::No
+        };
         let package = match self.kind() {
             TokenKind::String(s) => {
                 let s = s.clone();
@@ -411,7 +415,7 @@ impl<'a> Parser<'a> {
         let module = self.modid()?;
         // `ImportQualifiedPost`
         if self.eat_varid("qualified") {
-            qualified = true;
+            qualified = Qualified::Post;
         }
         let alias = if self.eat_varid("as") {
             Some(self.modid()?)
@@ -482,38 +486,10 @@ impl<'a> Parser<'a> {
             _ => self.unexpected("an import item"),
         }
     }
-
-    // --- Declarations -----------------------------------------------------
-
-    /// An opaque declaration: every token up to the `;` or `}` that ends
-    /// it, at nesting depth zero.
-    fn decl(&mut self) -> Result<Decl> {
-        let pos = self.pos();
-        let start = self.idx;
-        let mut depth: u32 = 0;
-        loop {
-            match self.kind() {
-                TokenKind::Eof => break,
-                TokenKind::Special(';' | '}') | TokenKind::VSemi | TokenKind::VClose
-                    if depth == 0 =>
-                {
-                    break
-                }
-                TokenKind::Special('{' | '(' | '[') | TokenKind::VOpen => depth += 1,
-                TokenKind::Special('}' | ')' | ']') | TokenKind::VClose => depth -= 1,
-                _ => {}
-            }
-            self.bump();
-        }
-        if self.idx == start {
-            return self.unexpected("a declaration");
-        }
-        Ok(Decl::Unparsed {
-            pos,
-            tokens: self.idx - start,
-        })
-    }
 }
+
+mod decls;
+mod types;
 
 #[cfg(test)]
 mod tests {
@@ -529,7 +505,7 @@ mod tests {
             pos: Pos { line: 1, col: 1 },
             module: module.into(),
             source: false,
-            qualified: false,
+            qualified: Qualified::No,
             package: None,
             alias: None,
             hiding: false,
@@ -582,7 +558,7 @@ mod tests {
 
     #[test]
     fn no_header() {
-        let m = parse("import A\nx = 1\n");
+        let m = parse("import A\nx :: Int\n");
         assert_eq!(m.name, "Main");
         assert_eq!(m.exports, None);
         assert_eq!(m.imports, vec![import("A")]);
@@ -620,7 +596,7 @@ mod tests {
                 at(
                     3,
                     Import {
-                        qualified: true,
+                        qualified: Qualified::Pre,
                         alias: Some("C".into()),
                         ..import("B")
                     }
@@ -628,7 +604,7 @@ mod tests {
                 at(
                     4,
                     Import {
-                        qualified: true,
+                        qualified: Qualified::Post,
                         alias: Some("E".into()),
                         ..import("D")
                     }
@@ -704,21 +680,8 @@ mod tests {
     }
 
     #[test]
-    fn opaque_declarations() {
-        let src = "module M where\n\
-                   import A\n\
-                   f x = do\n  a\n  b\n  where\n    y = 1\n\
-                   data T = T { a :: Int }\n\
-                   g = [1, 2]\n";
-        let m = parse(src);
-        assert_eq!(m.imports.len(), 1);
-        let positions: Vec<u32> = m.decls.iter().map(|d| d.pos().line).collect();
-        assert_eq!(positions, vec![3, 8, 9]);
-    }
-
-    #[test]
     fn explicit_braces() {
-        let m = parse("module M where { import A; import B; x = 1; y = 2 }");
+        let m = parse("module M where { import A; import B; x :: Int; y :: Int }");
         assert_eq!(m.imports.len(), 2);
         assert_eq!(m.decls.len(), 2);
     }
