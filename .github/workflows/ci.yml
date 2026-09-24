@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake check
+      - name: Progress report for this revision
+        run: nix develop .#tracker --command python3 scripts/progress.py >> "$GITHUB_STEP_SUMMARY"
