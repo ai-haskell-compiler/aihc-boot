@@ -90,7 +90,7 @@ _Last change in progress: 2026-09-24. Boot compiler: built._
 nix develop                          # Python, GHC 9.12, cabal, cargo and rustc
 cargo build --release                # build target/release/aihc-boot
 cargo test                           # run the unit tests
-./target/release/aihc-boot check --stage parse --package aihc-cpp  # needs ghc-parse
+./target/release/aihc-boot check --stage parse --package aihc-cpp  # needs aihc-parse
 ./target/release/aihc-boot parse vendor/aihc-cpp/src/Aihc/Cpp/Cursor.hs
 ./target/release/aihc-boot print vendor/aihc-cpp/src/Aihc/Cpp/Cursor.hs
 python3 scripts/progress.py          # print the progress report

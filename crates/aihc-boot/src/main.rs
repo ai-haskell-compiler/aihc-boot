@@ -10,7 +10,7 @@
 //! - `aihc-boot parse FILE`: print the syntax tree of one file. For
 //!   debugging.
 //! - `aihc-boot print FILE`: parse one file and print it back as source.
-//!   This is what `check` sends to GHC.
+//!   This is what `check` sends to the reference parser.
 //! - `aihc-boot run FILE.hs`: not implemented yet.
 
 use std::fmt::Write as _;
@@ -126,7 +126,7 @@ impl Report {
     }
 }
 
-/// The reference parser, `ghc-parse` from `tools/ghc-parse`, and the
+/// The reference parser, `aihc-parse` from `tools/aihc-parse`, and the
 /// language flags of one package.
 struct Reference {
     command: Option<PathBuf>,
@@ -136,9 +136,9 @@ struct Reference {
 
 impl Reference {
     fn for_package(pkg_dir: &Path) -> Reference {
-        let command = std::env::var_os("AIHC_GHC_PARSE")
+        let command = std::env::var_os("AIHC_PARSE")
             .map(PathBuf::from)
-            .or_else(|| find_in_path("ghc-parse"));
+            .or_else(|| find_in_path("aihc-parse"));
         Reference {
             command,
             flags: cabal_language_flags(pkg_dir),
@@ -225,10 +225,11 @@ fn check_module(file: &Path, stage: &str, reference: &Reference) -> Report {
         Ok(module) => module,
         Err(e) => return Report::fail(format!("{}: {}", e.stage, e.message), Some(e.pos)),
     };
-    // The round trip: GHC must read the printed module as the original.
+    // The round trip: aihc-parser must read the printed module as the
+    // original.
     let Some(command) = &reference.command else {
         return Report::fail(
-            "ghc-parse not found: set AIHC_GHC_PARSE or add it to PATH",
+            "aihc-parse not found: set AIHC_PARSE or add it to PATH",
             None,
         );
     };

@@ -10,30 +10,30 @@
     systems = ["x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin"];
     forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-    # The reference parser. `aihc-boot check --stage parse` runs it on the
-    # original module and on the module printed from aihc-boot's own syntax
-    # tree, and counts the module as parsed only when GHC's trees are equal.
-    ghcParse = pkgs: let
-      ghc = pkgs.haskell.compiler.ghc912;
-    in
+    # The reference parser: aihc-parser, the parser aihc itself uses,
+    # compiled from vendor/aihc-parser with a small driver.
+    # `aihc-boot check --stage parse` runs it on the original module and on
+    # the module printed from aihc-boot's own syntax tree, and counts the
+    # module as parsed only when the two trees are equal.
+    aihcParseGhc = pkgs: pkgs.haskell.packages.ghc912.ghcWithPackages (p: [p.megaparsec p.prettyprinter]);
+    aihcParse = pkgs:
       pkgs.stdenv.mkDerivation {
-        pname = "ghc-parse";
+        pname = "aihc-parse";
         version = "0.1.0";
-        src = ./tools/ghc-parse;
-        nativeBuildInputs = [ghc pkgs.makeWrapper];
+        src = self;
+        nativeBuildInputs = [(aihcParseGhc pkgs)];
         buildPhase = ''
-          ghc -O -package ghc -package process -outputdir build -o ghc-parse GhcParse.hs
+          ghc -O -ivendor/aihc-parser/src -outputdir build -o aihc-parse tools/aihc-parse/AihcParse.hs
         '';
         installPhase = ''
-          install -D ghc-parse $out/bin/ghc-parse
-          wrapProgram $out/bin/ghc-parse --prefix PATH : ${ghc}/bin
+          install -D aihc-parse $out/bin/aihc-parse
         '';
       };
 
     # Just enough to run the progress tracker (used by the scheduled
     # workflow). The reference parser is part of it, because M3 counts
     # modules through it.
-    trackerTools = pkgs: [pkgs.python3 pkgs.git pkgs.bash (ghcParse pkgs)];
+    trackerTools = pkgs: [pkgs.python3 pkgs.git pkgs.bash (aihcParse pkgs)];
 
     # The boot compiler itself. `cargoLock` reads the committed Cargo.lock,
     # so the build is reproducible and works without network access.
@@ -62,7 +62,7 @@
             # Reference toolchain: the vendored tree must keep building with
             # GHC so every simplification can be checked against a real
             # compiler. Matches the GHC series aihc itself uses.
-            pkgs.haskell.compiler.ghc912
+            (aihcParseGhc pkgs)
             pkgs.cabal-install
             pkgs.curl
             # The boot compiler is written in Rust.
@@ -79,7 +79,7 @@
     packages = forAllSystems (pkgs: {
       default = aihcBoot pkgs;
       aihc-boot = aihcBoot pkgs;
-      ghc-parse = ghcParse pkgs;
+      aihc-parse = aihcParse pkgs;
     });
 
     apps = forAllSystems (pkgs: {
