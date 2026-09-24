@@ -1,0 +1,17 @@
+[package]
+name = "aihc-boot"
+description = "A minimal Haskell compiler whose only job is to build aihc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "aihc-boot"
+path = "src/main.rs"
+
+[dependencies]
+aihc-syntax = { path = "../aihc-syntax" }
+
+[lints]
+workspace = true

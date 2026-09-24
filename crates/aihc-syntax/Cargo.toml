@@ -1,0 +1,12 @@
+[package]
+name = "aihc-syntax"
+description = "Lexer, layout and parser for the Haskell subset that aihc uses"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
