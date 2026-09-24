@@ -27,3 +27,6 @@ result-*
 
 # Python
 __pycache__/
+
+# Cabal (tools/resolve-oracle)
+dist-newstyle/

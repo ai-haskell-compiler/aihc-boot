@@ -1,0 +1,9 @@
+-- Build with `cabal build` in the dev shell. `nix build .#resolve-oracle`
+-- builds the same program from flake.nix without this file.
+packages:
+  .
+  ../../vendor/aihc-parser
+  ../../vendor/aihc-resolve
+
+tests: False
+benchmarks: False

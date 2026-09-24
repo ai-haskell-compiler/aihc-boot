@@ -121,8 +121,25 @@ M3–M7 read 0.
   reorders shows up as a difference. `ghc-parse` comes from the Nix
   shell; `AIHC_GHC_PARSE` overrides its path. Without it every module
   fails.
-  Resolving and typechecking a package needs its dependencies, so aihc-boot
-  reads `boot.toml`/`vendor/` itself to find them.
+- **A module counts as resolved only when aihc-resolve agrees.** The
+  reference is `resolve-oracle` (`tools/resolve-oracle`), a small program
+  on the vendored `aihc-resolve` library. It resolves the package and its
+  vendored dependencies with the same source files, the same `.cabal`
+  language settings and the same boot libraries that aihc-boot sees, so
+  every top-level name resolves to the same package, module and name on
+  both sides. Both sides print one record per identifier occurrence, and
+  the module passes when the records agree: the same spans, the same
+  namespaces, equal top-level targets, and local binders that partition
+  the spans the same way (the numbering of locals is not compared). The
+  oracle also comes from the Nix shell; `AIHC_RESOLVE_ORACLE` overrides
+  its path. `aihc-boot manifest`, `dump` and `oracle` show the three
+  inputs of the comparison. aihc-resolve takes every primitive from the
+  outside: the manifest's `builtin` lines name the modules whose exports
+  are in scope without an import. The list is empty until the boot `base`
+  exists.
+- Resolving and typechecking a package needs its dependencies, so aihc-boot
+  reads the `.cabal` files under `vendor/` itself to find them. A
+  dependency counts only when it is vendored.
 - `aihc-boot run FILE.hs` compiles and runs a single-module program
   against the vendored packages. Used by the eval tests.
 - Stage-1 scripts invoke `$AIHC_BOOT` however they need to.
@@ -149,6 +166,13 @@ The Rust workspace has one crate per stage, plus the binary:
   re-parses every vendored module the parser accepts.
 - `tools/ghc-parse`: the reference parser, a small program on the GHC
   API. See "Compiler interface" above.
+- `crates/aihc-resolve`: name resolution. It defines the resolution
+  records, reads and writes them, and compares two resolutions of a
+  module. The resolver itself is not written yet: every module fails with
+  `resolve: not implemented yet`, so M4 reads 0 until it exists and then
+  rises on its own.
+- `tools/resolve-oracle`: the reference resolver, a small program on the
+  vendored `aihc-resolve`. See "Compiler interface" above.
 - `crates/aihc-boot`: the `aihc-boot` binary. It implements the command
   line contract above and reports every module as JSON. Failures carry
   an `error` field and, when known, the `line` and `col` of the first

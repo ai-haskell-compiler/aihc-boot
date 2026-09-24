@@ -1,0 +1,22 @@
+cabal-version: 3.8
+name: resolve-oracle
+version: 0.1.0
+build-type: Simple
+license: MIT
+synopsis: Run aihc-resolve over the vendored tree and print every resolution
+description:
+  The reference resolver for aihc-boot. See docs/PLAN.md, "Compiler
+  interface", for the manifest it reads and the records it prints.
+
+executable resolve-oracle
+  main-is: ResolveOracle.hs
+  build-depends:
+    aihc-parser,
+    aihc-resolve,
+    base >=4.19 && <5,
+    bytestring,
+    containers,
+    text,
+
+  ghc-options: -Wall -O
+  default-language: GHC2021
