@@ -9,8 +9,9 @@
 //! 3. [`parser`]: tokens to a syntax tree ([`ast`]).
 //!
 //! [`print`] goes the other way, from a syntax tree to source text. The
-//! boot compiler uses it to check the parser against GHC: a module counts
-//! as parsed only when GHC reads the printed source as the same module.
+//! boot compiler uses it to check the parser against aihc-parser, the
+//! parser aihc itself uses: a module counts as parsed only when
+//! aihc-parser reads the printed source as the same module.
 
 pub mod ast;
 pub mod layout;
@@ -83,7 +84,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, SyntaxError> {
 
 /// Parse a source file into a module.
 pub fn parse(src: &str) -> Result<ast::Module, SyntaxError> {
-    Ok(parser::parse_module(&tokenize(src)?)?)
+    Ok(parser::parse_module(tokenize(src)?)?)
 }
 
 #[cfg(test)]

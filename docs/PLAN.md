@@ -113,14 +113,20 @@ M3–M7 read 0.
   `{"file": "vendor/NAME/src/Data/Foo.hs", "ok": true}`.
   Extra fields (such as `"error"`) are ignored. Modules missing from the
   output count as failures, so a crash only loses the modules after it.
-- **A module counts as parsed only after a round trip through GHC.**
-  aihc-boot parses the module, prints its syntax tree back as source
-  (with explicit braces), and runs `ghc-parse` (`tools/ghc-parse`, GHC's
-  own parser) on both files. The module passes when GHC's two trees are
-  equal. This keeps the parser honest: a construct it skips or
-  reorders shows up as a difference. `ghc-parse` comes from the Nix
-  shell; `AIHC_GHC_PARSE` overrides its path. Without it every module
-  fails.
+- **A module counts as parsed only after a round trip through
+  aihc-parser.** aihc-boot parses the module, prints its syntax tree back
+  as source (with explicit braces), and runs `aihc-parse`
+  (`tools/aihc-parse`, a driver for the vendored `aihc-parser`, the
+  parser aihc itself uses) on both files. The module passes when the two
+  trees are equal, source spans aside. This keeps the parser honest: a
+  construct it skips or reorders shows up as a difference. `aihc-parse`
+  comes from the Nix shell; `AIHC_PARSE` overrides its path. Without it
+  every module fails.
+- **Pragmas are ignored.** `INLINE`, `SPECIALIZE`, `UNPACK`, `SCC`,
+  `SOURCE` and the others do not change what the vendored code
+  computes. The lexer drops them, and `aihc-parse` removes them from
+  aihc-parser's tree before the comparison. Only `LANGUAGE` stays,
+  because it changes how a module is read.
 - **A module counts as resolved only when aihc-resolve agrees.** The
   reference is `resolve-oracle` (`tools/resolve-oracle`), a small program
   on the vendored `aihc-resolve` library. It resolves the package and its
@@ -162,10 +168,12 @@ The Rust workspace has one crate per stage, plus the binary:
 
 - `crates/aihc-syntax`: lexer, layout rule, syntax tree, parser and
   printer. The parser skips nothing: a construct it does not know is a
-  parse error with a position. The tests include one that prints and
-  re-parses every vendored module the parser accepts.
-- `tools/ghc-parse`: the reference parser, a small program on the GHC
-  API. See "Compiler interface" above.
+  parse error with a position. Operator chains stay flat and in source
+  order; fixity resolution comes after name resolution. The tests
+  include one that prints and re-parses every vendored module the
+  parser accepts.
+- `tools/aihc-parse`: the reference parser, a small driver for the
+  vendored `aihc-parser`. See "Compiler interface" above.
 - `crates/aihc-resolve`: name resolution. It defines the resolution
   records, reads and writes them, and compares two resolutions of a
   module. The resolver itself is not written yet: every module fails with
