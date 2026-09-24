@@ -88,8 +88,6 @@ pub enum Subs {
 pub struct Import {
     pub pos: Pos,
     pub module: String,
-    /// `{-# SOURCE #-}`: import the `.hs-boot` file.
-    pub source: bool,
     pub qualified: Qualified,
     /// The package qualifier of `PackageImports`, such as `"base"`.
     pub package: Option<String>,

@@ -55,8 +55,8 @@ pub enum TokenKind {
     /// A special character: one of `(`, `)`, `,`, `;`, `[`, `]`, `` ` ``, `{` or `}`.
     Special(char),
 
-    /// A `LANGUAGE`, `OPTIONS_GHC` or `SOURCE` pragma. The text excludes
-    /// the `{-#` and `#-}` brackets. The lexer drops every other pragma.
+    /// A `LANGUAGE` pragma. The text excludes the `{-#` and `#-}`
+    /// brackets. The lexer drops every other pragma.
     Pragma(String),
 
     /// A lone `'` that does not start a character literal. `DataKinds`

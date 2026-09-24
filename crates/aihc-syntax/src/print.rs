@@ -206,9 +206,6 @@ impl Printer {
 
     fn import(&mut self, i: &Import) {
         self.push("import ");
-        if i.source {
-            self.push("{-# SOURCE #-} ");
-        }
         if i.qualified == Qualified::Pre {
             self.push("qualified ");
         }
@@ -1046,7 +1043,7 @@ mod tests {
              import qualified A as B;\n\
              import C qualified;\n\
              import D hiding (x, Y(..));\n\
-             import {-# SOURCE #-} \"pkg\" E\n}\n"
+             import \"pkg\" E\n}\n"
         );
     }
 

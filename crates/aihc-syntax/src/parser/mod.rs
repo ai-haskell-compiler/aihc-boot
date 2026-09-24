@@ -450,13 +450,6 @@ impl Parser {
     fn import(&mut self) -> Result<Import> {
         let pos = self.pos();
         self.expect_keyword(Keyword::Import)?;
-        let mut source = false;
-        while let TokenKind::Pragma(text) = self.kind() {
-            if text.trim() == "SOURCE" {
-                source = true;
-            }
-            self.bump();
-        }
         let mut qualified = if self.eat_varid("qualified") {
             Qualified::Pre
         } else {
@@ -492,7 +485,6 @@ impl Parser {
         Ok(Import {
             pos,
             module,
-            source,
             qualified,
             package,
             alias,
@@ -564,7 +556,6 @@ mod tests {
         Import {
             pos: Pos { line: 1, col: 1 },
             module: module.into(),
-            source: false,
             qualified: Qualified::No,
             package: None,
             alias: None,
@@ -703,13 +694,7 @@ mod tests {
                         ..import("G")
                     }
                 ),
-                at(
-                    7,
-                    Import {
-                        source: true,
-                        ..import("H")
-                    }
-                ),
+                at(7, import("H")),
                 at(
                     8,
                     Import {

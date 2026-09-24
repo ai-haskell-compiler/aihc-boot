@@ -7,8 +7,9 @@
 -- the file that aihc-boot printed from its own syntax tree.
 --
 -- The tool removes pragmas from the tree before it prints: `INLINE`,
--- `SPECIALIZE`, `UNPACK`, `SCC` and the others. aihc-boot ignores them,
--- because they do not change what a program computes.
+-- `SPECIALIZE`, `UNPACK`, `SCC`, `SOURCE` and the others. aihc-boot
+-- ignores them, because they do not change what the vendored code
+-- computes.
 --
 -- Usage:
 --
@@ -98,6 +99,7 @@ stripPragmas =
         . mkT stripBang
         . mkT stripExpr
         . mkT stripOverlap
+        . mkT stripSource
     )
 
 stripDecls :: [LHsDecl GhcPs] -> [LHsDecl GhcPs]
@@ -128,6 +130,9 @@ stripBang (HsBang _ strictness) = HsBang NoSrcUnpack strictness
 stripExpr :: HsExpr GhcPs -> HsExpr GhcPs
 stripExpr (HsPragE _ _ (L _ e)) = e
 stripExpr e = e
+
+stripSource :: ImportDecl GhcPs -> ImportDecl GhcPs
+stripSource decl = decl {ideclSource = NotBoot}
 
 stripOverlap :: ClsInstDecl GhcPs -> ClsInstDecl GhcPs
 stripOverlap decl = decl {cid_overlap_mode = Nothing}

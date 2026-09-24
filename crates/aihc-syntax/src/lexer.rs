@@ -2,10 +2,9 @@
 //!
 //! The lexer follows chapter 2 of the Haskell 2010 report, plus the
 //! extensions the vendored tree uses: `MagicHash` names and the `'` tick
-//! of `DataKinds`. Comments go away. So do pragmas, except the three that
-//! change how a module is read: `LANGUAGE`, `OPTIONS_GHC` and `SOURCE`.
-//! Every other pragma is an optimization hint, and aihc-boot ignores
-//! those. The lexer does not apply the layout rule; see the `layout`
+//! of `DataKinds`. Comments go away. So do pragmas, except `LANGUAGE`,
+//! which changes how a module is read. aihc-boot ignores every other
+//! pragma. The lexer does not apply the layout rule; see the `layout`
 //! module for that.
 
 use crate::token::{Keyword, Pos, ReservedOp, Token, TokenKind};
@@ -241,10 +240,7 @@ impl Lexer {
                 None => return self.error(start, "unterminated pragma"),
             }
         }
-        let keep = matches!(
-            text.split_whitespace().next(),
-            Some("LANGUAGE" | "OPTIONS_GHC" | "OPTIONS" | "SOURCE")
-        );
+        let keep = matches!(text.split_whitespace().next(), Some("LANGUAGE"));
         Ok(keep.then_some(Token {
             kind: TokenKind::Pragma(text),
             pos: start,

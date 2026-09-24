@@ -75,8 +75,7 @@ pub fn layout(tokens: Vec<Token>) -> Result<Vec<Token>, LayoutError> {
         let is_eof = tok.kind == TokenKind::Eof;
 
         if let TokenKind::Pragma(_) = tok.kind {
-            // The pragmas that reach this pass (`LANGUAGE`, `OPTIONS_GHC`,
-            // `SOURCE`) are comments for the layout rule.
+            // `LANGUAGE` pragmas are comments for the layout rule.
             out.push(tok);
             continue;
         }

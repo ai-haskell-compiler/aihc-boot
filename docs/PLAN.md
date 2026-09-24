@@ -121,11 +121,11 @@ M3–M7 read 0.
   reorders shows up as a difference. `ghc-parse` comes from the Nix
   shell; `AIHC_GHC_PARSE` overrides its path. Without it every module
   fails.
-- **Pragmas are ignored.** `INLINE`, `SPECIALIZE`, `UNPACK`, `SCC` and
-  the other optimization hints do not change what a program computes.
-  The lexer drops them, and `ghc-parse` removes them from GHC's tree
-  before the comparison. Only `LANGUAGE`, `OPTIONS_GHC` and `SOURCE`
-  stay, because they change how a module is read.
+- **Pragmas are ignored.** `INLINE`, `SPECIALIZE`, `UNPACK`, `SCC`,
+  `SOURCE` and the others do not change what the vendored code
+  computes. The lexer drops them, and `ghc-parse` removes them from
+  GHC's tree before the comparison. Only `LANGUAGE` stays, because it
+  changes how a module is read.
   Resolving and typechecking a package needs its dependencies, so aihc-boot
   reads `boot.toml`/`vendor/` itself to find them.
 - `aihc-boot run FILE.hs` compiles and runs a single-module program
