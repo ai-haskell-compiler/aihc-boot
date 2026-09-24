@@ -231,6 +231,10 @@ impl Parser {
                     self.bump();
                     name
                 }
+                TokenKind::ReservedOp(ReservedOp::Colon) => {
+                    self.bump();
+                    ":".to_string()
+                }
                 TokenKind::Special('`') => {
                     self.bump();
                     let name = self.conid()?;
@@ -310,6 +314,10 @@ impl Parser {
                 self.bump();
                 Ok(name)
             }
+            TokenKind::ReservedOp(ReservedOp::Colon) => {
+                self.bump();
+                Ok(":".to_string())
+            }
             TokenKind::Special('`') => {
                 self.bump();
                 let name = match self.kind() {
@@ -333,7 +341,12 @@ impl Parser {
     fn data_decl(&mut self, newtype: bool) -> Result<Decl> {
         let pos = self.pos();
         self.bump();
-        let name = self.conid()?;
+        // A type operator in prefix form: `data (:+:) f g p`.
+        let name = match self.parenthesized_name() {
+            Some(name) if name.qual.is_empty() => name.name,
+            Some(_) => return self.unexpected("an unqualified type constructor"),
+            None => self.conid()?,
+        };
         let vars = self.ty_var_binds()?;
         let kind = if self.eat(&TokenKind::ReservedOp(ReservedOp::DoubleColon)) {
             Some(self.ty()?)
@@ -379,12 +392,16 @@ impl Parser {
             None
         };
         let body = if self.con_is_infix() {
-            let left = self.bang_type(false)?;
+            let left = self.infix_con_arg()?;
             let op = match self.kind() {
                 TokenKind::ConSym { qual, name } if qual.is_empty() => {
                     let name = name.clone();
                     self.bump();
                     name
+                }
+                TokenKind::ReservedOp(ReservedOp::Colon) => {
+                    self.bump();
+                    ":".to_string()
                 }
                 TokenKind::Special('`') => {
                     self.bump();
@@ -394,8 +411,21 @@ impl Parser {
                 }
                 _ => return self.unexpected("a constructor operator"),
             };
-            let right = self.bang_type(false)?;
+            let right = self.infix_con_arg()?;
             ConBody::Infix { left, op, right }
+        } else if self.at_special('[')
+            && matches!(
+                self.tokens.get(self.idx + 1).map(|t| &t.kind),
+                Some(TokenKind::Special(']'))
+            )
+        {
+            // The empty list constructor, in the declaration of the list
+            // type: `data List a = [] | a : List a`.
+            self.idx += 2;
+            ConBody::Prefix {
+                name: "[]".to_string(),
+                args: Vec::new(),
+            }
         } else {
             let name = self.conid()?;
             if self.at_special('{') {
@@ -414,6 +444,18 @@ impl Parser {
             forall,
             ctx,
             body,
+        })
+    }
+
+    /// An argument of an infix constructor: a type application such as
+    /// `List a`, or a strictness mark and an atype.
+    fn infix_con_arg(&mut self) -> Result<BangType> {
+        if self.at_varsym("!") || self.at(&TokenKind::ReservedOp(ReservedOp::Tilde)) {
+            return self.bang_type(false);
+        }
+        Ok(BangType {
+            strict: None,
+            ty: self.optype()?,
         })
     }
 
@@ -443,7 +485,11 @@ impl Parser {
                     }
                     depth -= 1;
                 }
-                TokenKind::ConSym { .. } if depth == 0 => return true,
+                TokenKind::ConSym { .. } | TokenKind::ReservedOp(ReservedOp::Colon)
+                    if depth == 0 =>
+                {
+                    return true;
+                }
                 TokenKind::Special('`') if depth == 0 => {
                     return matches!(
                         self.tokens.get(i + 1).map(|t| &t.kind),
@@ -679,6 +725,20 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn list_and_operator_declarations() {
+        let d = decls("infixr 5 :\ndata List a = [] | a : List a\ndata (:+:) f g p = L1 (f p)");
+        assert!(matches!(&d[0], Decl::Fixity { ops, .. } if ops == &[":"]));
+        let Decl::Data { cons, .. } = &d[1] else {
+            panic!("{:?}", d[1]);
+        };
+        assert!(
+            matches!(&cons[0].body, ConBody::Prefix { name, args } if name == "[]" && args.is_empty())
+        );
+        assert!(matches!(&cons[1].body, ConBody::Infix { op, .. } if op == ":"));
+        assert!(matches!(&d[2], Decl::Data { name, vars, .. } if name == ":+:" && vars.len() == 3));
     }
 
     #[test]

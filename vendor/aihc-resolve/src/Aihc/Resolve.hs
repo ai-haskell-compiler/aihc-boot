@@ -148,6 +148,12 @@ annotationResolveError annotation =
 -- read out of the same map, and the units above this one import the half
 -- that the unit itself exports. Building the export scopes is most of what
 -- resolving a unit costs, so it happens once.
+--
+-- The builtin scope supplies the terms that desugared syntax applies, such as
+-- @fromInteger@, and the types of primitive literals. It also supplies the
+-- list constructor @:@ and the equality type @~@, which every module sees
+-- without an import. The resolver does not look up these names in a module
+-- of its own choice.
 resolveUnit :: Scope -> ModuleExports -> [ModuleUnit] -> ResolveResult
 resolveUnit builtinScope exports packageModules =
   ResolveResult
@@ -164,7 +170,7 @@ resolveModule :: Scope -> Package -> ModuleExports -> [Extension] -> Int -> Modu
 resolveModule builtinScope package exports extensions nextLocal modu =
   let (imports', importErrors) = resolveModuleImports package exports (moduleImports modu)
       modu' = modu {moduleImports = imports'}
-      scope = moduleScope package exports extensions modu'
+      scope = moduleScope builtinScope package exports extensions modu'
       (nextLocal', declErrors, decls') =
         runResolveM
           scope
@@ -2009,11 +2015,15 @@ resolveTermUse name = do
   scope <- currentScope
   resolveNameTo sp ResolutionNamespaceTerm (resolveTermName scope name) name
 
+-- | Resolve a term name that has its own place in the source, such as an
+-- infix operator. The parser gives the name the span of its token. A name
+-- without a span takes the start of the enclosing syntax.
 resolveTermUseAtName :: Name -> ResolveM Name
 resolveTermUseAtName name = do
   sp <- currentSpan
   scope <- currentScope
-  resolveNameTo (spanStartNameSpan sp (nameText name)) ResolutionNamespaceTerm (resolveTermName scope name) name
+  let nameSpan = sourceSpanFromAnns (nameAnns name) <|> spanStartNameSpan sp (nameText name)
+  resolveNameTo nameSpan ResolutionNamespaceTerm (resolveTermName scope name) name
 
 resolveInfixExpr :: Expr -> ResolveM Expr
 resolveInfixExpr expr = do

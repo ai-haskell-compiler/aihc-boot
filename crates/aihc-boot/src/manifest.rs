@@ -211,17 +211,28 @@ pub fn package_order(
     Ok(done)
 }
 
+/// The modules of the boot `base` whose exports are in scope in every
+/// module without an import: the list constructor `:` of `GHC.Types`.
+const BUILTIN_MODULES: &[&str] = &["GHC.Types"];
+
 /// The manifest for `tools/resolve-oracle`: the target package and its
 /// vendored dependencies, in dependency order, with their modules. Only
-/// the target's records are reported.
+/// the target's records are reported. When `base` is one of the packages,
+/// the manifest also names its builtin modules.
 ///
 /// # Errors
 ///
 /// See [`package_order`].
 pub fn manifest(target: &str) -> Result<String, String> {
     let packages = vendored_packages();
+    let order = package_order(target, &packages)?;
     let mut out = String::new();
-    for name in package_order(target, &packages)? {
+    if order.iter().any(|name| name == "base") {
+        for module in BUILTIN_MODULES {
+            writeln!(out, "builtin {module}").unwrap();
+        }
+    }
+    for name in order {
         let package = &packages[name.as_str()];
         writeln!(out, "package {name}").unwrap();
         if let Some(language) = &package.language {

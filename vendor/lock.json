@@ -38,10 +38,10 @@
   "aihc-resolve": {
     "source": "git",
     "url": "https://github.com/ai-haskell-compiler/aihc",
-    "rev": "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05",
+    "rev": "5e0bb11be6817ad43f407a248ba67ad568aa57a1",
     "subdir": "components/aihc-resolve",
     "upstream_modules": 8,
-    "upstream_lines": 4092,
+    "upstream_lines": 4106,
     "vendored_at": "2026-09-24"
   },
   "aihc-tc": {

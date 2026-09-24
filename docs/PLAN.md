@@ -141,8 +141,18 @@ M3–M7 read 0.
   its path. `aihc-boot manifest`, `dump` and `oracle` show the three
   inputs of the comparison. aihc-resolve takes every primitive from the
   outside: the manifest's `builtin` lines name the modules whose exports
-  are in scope without an import. The list is empty until the boot `base`
-  exists.
+  are in scope without an import. The syntax uses the list constructor
+  `:` and the terms that desugaring applies (`fromInteger`, `>>=` and the
+  others) from these modules. When `base` is a dependency, the manifest
+  names `GHC.Types`. The boot `base` does not define the desugaring terms
+  yet.
+- **The boot `base`** is in `vendor/base`. It is a small package that
+  has only the names that the vendored tree uses. Its modules and names
+  follow GHC's `base`, so the vendored tree also builds with GHC. GHC
+  does not build `vendor/base`, so it is not in `cabal.project`. A
+  primitive is an empty `data` declaration (`data Int`) or a definition
+  in Haskell (`seq` uses a bang pattern). Add names to it when a
+  package does not resolve.
 - Resolving and typechecking a package needs its dependencies, so aihc-boot
   reads the `.cabal` files under `vendor/` itself to find them. A
   dependency counts only when it is vendored.
