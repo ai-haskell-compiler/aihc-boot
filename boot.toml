@@ -1,0 +1,250 @@
+# aihc-boot manifest: every package aihc-boot has to compile, and what we plan
+# to do with it. scripts/progress.py reads this file; scripts/vendor.py uses it
+# to fetch upstream sources into vendor/<name>/.
+#
+# plan:
+#   keep      vendor as-is (first-party aihc code; only mechanical edits)
+#   simplify  vendor upstream, then cut it down to the API aihc actually uses
+#   replace   write a small in-tree package with the same name/modules, covering
+#             only the API aihc uses (vendor/<name>/ holds the replacement)
+#   drop      patch the packages in `used_by` so this dependency disappears
+#
+# used_by lists the vendored packages that depend on it directly. A `drop` is
+# counted as done once every `used_by` package is vendored and none of their
+# .cabal files mention it any more.
+#
+# The list below is aihc's *direct* library dependencies (as of the pinned rev).
+# Transitive dependencies show up as "unaccounted" in the README once the
+# direct ones are vendored; triaging them is part of milestone M2.
+
+[compiler]
+# Command that runs the boot compiler. `AIHC_BOOT` in the environment
+# overrides it. See docs/PLAN.md, "Compiler interface", for the contract.
+command = ["./target/release/aihc-boot"]
+stage_timeout = 1800 # seconds per `check --stage` run (one package)
+eval_timeout = 60    # seconds per eval test
+stage1_timeout = 3600
+
+# --- First-party: the target itself -----------------------------------------
+
+[packages.aihc]
+plan = "keep"
+source = "git"
+url = "https://github.com/ai-haskell-compiler/aihc"
+rev = "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05"
+subdir = "bin/aihc"
+note = "Library + `aihc` executable. Drop aihc-dev, the Custom Setup.hs and the GRIN interpreter."
+
+[packages.aihc-resolve]
+plan = "keep"
+source = "git"
+url = "https://github.com/ai-haskell-compiler/aihc"
+rev = "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05"
+subdir = "components/aihc-resolve"
+used_by = ["aihc", "aihc-tc"]
+
+[packages.aihc-tc]
+plan = "keep"
+source = "git"
+url = "https://github.com/ai-haskell-compiler/aihc"
+rev = "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05"
+subdir = "components/aihc-tc"
+used_by = ["aihc"]
+note = "Also provides prim-wiring/, which aihc lists in hs-source-dirs."
+
+[packages.aihc-package-plan]
+plan = "keep"
+source = "git"
+url = "https://github.com/ai-haskell-compiler/aihc"
+rev = "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05"
+subdir = "tooling/aihc-package-plan"
+used_by = ["aihc"]
+
+[packages.aihc-hackage]
+plan = "simplify"
+source = "git"
+url = "https://github.com/ai-haskell-compiler/aihc"
+rev = "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05"
+subdir = "tooling/aihc-hackage"
+used_by = ["aihc", "aihc-package-plan"]
+note = "Keep .cabal handling; remove index download (HTTP, tar, zlib)."
+
+[packages.aihc-parser]
+plan = "keep"
+source = "git"
+url = "https://github.com/ai-haskell-compiler/aihc-parser"
+rev = "46420da73d505555b46c03c00bd7fe44cb72e331"
+used_by = ["aihc", "aihc-resolve", "aihc-tc", "aihc-package-plan"]
+
+[packages.aihc-cpp]
+plan = "keep"
+source = "git"
+url = "https://github.com/ai-haskell-compiler/aihc-cpp"
+rev = "ea9c5fb1532cd4c3e8a3b39304372226b7f7dcaa"
+used_by = ["aihc", "aihc-package-plan"]
+
+# --- Boot libraries (normally shipped with GHC) -----------------------------
+
+[packages.base]
+plan = "replace"
+used_by = ["*"]
+note = "aihc-boot's own minimal base/Prelude, grown on demand."
+
+[packages.ghc-prim]
+plan = "replace"
+used_by = ["*"]
+note = "Thin shim over the primitives in aihc-boot's base (deepseq and others import it)."
+
+[packages.containers]
+plan = "simplify"
+source = "hackage"
+used_by = ["*"]
+note = "Map, Set, IntMap, IntSet. Probably no Seq/Graph/Tree."
+
+[packages.text]
+plan = "simplify"
+source = "hackage"
+used_by = ["*"]
+note = "130 importing modules. Consider a simple UTF-8 array or String-backed Text."
+
+[packages.bytestring]
+plan = "simplify"
+source = "hackage"
+used_by = ["*"]
+note = "Strict + Builder; likely no lazy ByteString."
+
+[packages.deepseq]
+plan = "simplify"
+source = "hackage"
+used_by = ["aihc", "aihc-parser", "aihc-cpp", "aihc-resolve", "aihc-tc"]
+note = "NFData, deepseq, force, ($!!). No Generic deriving machinery."
+
+[packages.transformers]
+plan = "simplify"
+source = "hackage"
+used_by = ["aihc", "aihc-tc", "aihc-package-plan"]
+note = "State/Reader/Except/Writer only."
+
+[packages.array]
+plan = "simplify"
+source = "hackage"
+used_by = ["aihc"]
+
+[packages.binary]
+plan = "simplify"
+source = "hackage"
+used_by = ["aihc"]
+note = "Interface/cache files and object writing."
+
+[packages.filepath]
+plan = "simplify"
+source = "hackage"
+used_by = ["*"]
+note = "POSIX String paths only; drop OsPath."
+
+[packages.directory]
+plan = "replace"
+used_by = ["*"]
+note = "Thin shim over the boot RTS's file-system primitives."
+
+[packages.process]
+plan = "replace"
+used_by = ["aihc"]
+note = "Needed to invoke the C compiler/linker."
+
+[packages.unix]
+plan = "drop"
+used_by = ["aihc"]
+
+[packages.time]
+plan = "drop"
+used_by = ["aihc-hackage", "aihc-package-plan"]
+note = "Only used for timestamps in caches/lock files."
+
+[packages.stm]
+plan = "drop"
+used_by = ["aihc"]
+note = "Parallel build scheduler; boot builds sequentially."
+
+[packages.async]
+plan = "drop"
+used_by = ["aihc"]
+
+# --- Hackage dependencies ---------------------------------------------------
+
+[packages.megaparsec]
+plan = "simplify"
+source = "hackage"
+used_by = ["aihc", "aihc-parser"]
+note = "Pulls in parser-combinators, mtl, case-insensitive, scientific."
+
+[packages.prettyprinter]
+plan = "simplify"
+source = "hackage"
+used_by = ["aihc", "aihc-parser"]
+
+[packages.Cabal-syntax]
+plan = "replace"
+used_by = ["aihc", "aihc-hackage", "aihc-package-plan"]
+note = "Huge. Replace with a minimal .cabal parser for the fields aihc reads."
+
+[packages.Cabal]
+plan = "drop"
+used_by = ["aihc-hackage"]
+note = "Also the Custom Setup.hs in aihc; generate the build identity another way."
+
+[packages.aeson]
+plan = "replace"
+used_by = ["aihc", "aihc-package-plan"]
+note = "Lock files/manifests only. A tiny JSON value type + parser/printer."
+
+[packages.optparse-applicative]
+plan = "replace"
+used_by = ["aihc"]
+note = "One module uses it. Hand-rolled argument parsing, or a small clone."
+
+[packages.cryptohash-sha256]
+plan = "replace"
+used_by = ["aihc", "aihc-package-plan"]
+note = "Pure-Haskell SHA-256."
+
+[packages.vector]
+plan = "simplify"
+source = "hackage"
+used_by = ["aihc"]
+note = "2 importing modules; could become a wrapper over array."
+
+[packages.primitive]
+plan = "simplify"
+source = "hackage"
+used_by = ["aihc"]
+
+[packages.haskeline]
+plan = "drop"
+used_by = ["aihc"]
+note = "Listed in build-depends but not imported."
+
+[packages.libffi]
+plan = "drop"
+used_by = ["aihc"]
+note = "Only the GRIN interpreter uses it."
+
+[packages.http-client]
+plan = "drop"
+used_by = ["aihc-hackage"]
+
+[packages.http-client-tls]
+plan = "drop"
+used_by = ["aihc-hackage"]
+
+[packages.http-types]
+plan = "drop"
+used_by = ["aihc-hackage"]
+
+[packages.tar]
+plan = "drop"
+used_by = ["aihc-hackage"]
+
+[packages.zlib]
+plan = "drop"
+used_by = ["aihc-hackage"]
