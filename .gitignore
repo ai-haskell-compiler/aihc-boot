@@ -28,5 +28,5 @@ result-*
 # Python
 __pycache__/
 
-# Cabal (tools/resolve-oracle)
+# Cabal (cabal.project, tools/resolve-oracle)
 dist-newstyle/

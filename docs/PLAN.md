@@ -198,6 +198,11 @@ more thing the Nix build has to fetch.
   small shell the scheduled workflow uses.
 - `scripts/vendor.py NAME` / `--all` fetches upstream sources into
   `vendor/` and records the version and baseline size in `vendor/lock.json`.
+- `cabal build all` in the dev shell builds the vendored packages in
+  `cabal.project` with GHC. The local boot libraries (`bytestring`,
+  `containers` and the others) replace the copies that come with GHC.
+  Add a package to `cabal.project` when all of its dependencies are
+  vendored.
 - `scripts/progress.py` prints the report; `--write` updates the README and
   `progress/history.csv`. It records a new history row only when some number
   changed, so the daily run commits nothing on days without progress.

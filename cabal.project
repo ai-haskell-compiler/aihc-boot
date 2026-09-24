@@ -1,0 +1,10 @@
+-- The vendored tree, built with GHC as the reference compiler. The local
+-- copies of the boot libraries (bytestring, containers and the others)
+-- replace the copies that come with GHC.
+packages:
+  vendor/aihc-cpp
+  vendor/bytestring
+  vendor/containers
+  vendor/deepseq
+  vendor/filepath
+  vendor/text
