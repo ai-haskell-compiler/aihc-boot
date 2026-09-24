@@ -7,6 +7,8 @@
 //!   of `vendor/NAME/` up to `STAGE` and print one JSON object per module.
 //! - `aihc-boot lex FILE`: print the tokens of one file, after layout.
 //!   For debugging.
+//! - `aihc-boot parse FILE`: print the syntax tree of one file. For
+//!   debugging.
 //! - `aihc-boot run FILE.hs`: not implemented yet.
 
 use std::fmt::Write as _;
@@ -18,6 +20,7 @@ const USAGE: &str = "\
 usage:
   aihc-boot check --stage {parse|resolve|typecheck} --package NAME
   aihc-boot lex FILE
+  aihc-boot parse FILE
   aihc-boot run FILE.hs
 ";
 
@@ -26,6 +29,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("check") => check(&args[1..]),
         Some("lex") => lex(&args[1..]),
+        Some("parse") => parse(&args[1..]),
         Some("run") => Err("`run` is not implemented yet".to_string()),
         Some("--help" | "-h") => {
             print!("{USAGE}");
@@ -125,18 +129,39 @@ fn check_module(file: &Path, stage: &str) -> Report {
             pos: None,
         };
     }
-    if let Err(e) = aihc_syntax::tokenize(&src) {
+    let module = match aihc_syntax::parse(&src) {
+        Ok(module) => module,
+        Err(e) => {
+            return Report {
+                ok: false,
+                error: Some(format!("{}: {}", e.stage, e.message)),
+                pos: Some(e.pos),
+            }
+        }
+    };
+    // The parser handles the header and the imports. Declarations are
+    // opaque, so a module with declarations does not pass yet.
+    if let Some(decl) = module
+        .decls
+        .iter()
+        .find(|d| matches!(d, aihc_syntax::ast::Decl::Unparsed { .. }))
+    {
         return Report {
             ok: false,
-            error: Some(format!("{}: {}", e.stage, e.message)),
-            pos: Some(e.pos),
+            error: Some("parse: declarations are not parsed yet".into()),
+            pos: Some(decl.pos()),
         };
     }
-    // The lexer and layout pass accept the module. No later stage exists
-    // yet, so every module fails here.
+    if stage != "parse" {
+        return Report {
+            ok: false,
+            error: Some(format!("stage {stage} is not implemented yet")),
+            pos: None,
+        };
+    }
     Report {
-        ok: false,
-        error: Some(format!("stage {stage} is not implemented yet")),
+        ok: true,
+        error: None,
         pos: None,
     }
 }
@@ -182,6 +207,19 @@ fn json_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+// --- parse -----------------------------------------------------------------
+
+fn parse(args: &[String]) -> Result<(), String> {
+    let [file] = args else {
+        return Err("parse takes one file".into());
+    };
+    let src = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+    let module = aihc_syntax::parse(&src).map_err(|e| format!("{file}:{e}"))?;
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "{module:#?}").map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // --- lex -------------------------------------------------------------------

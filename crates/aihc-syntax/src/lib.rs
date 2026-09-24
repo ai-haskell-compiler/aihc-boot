@@ -6,16 +6,19 @@
 //!
 //! 1. [`lexer`]: source text to tokens.
 //! 2. [`layout`]: virtual braces and semicolons from indentation.
-//! 3. A parser (not written yet): tokens to a syntax tree.
+//! 3. [`parser`]: tokens to a syntax tree ([`ast`]).
 
+pub mod ast;
 pub mod layout;
 pub mod lexer;
+pub mod parser;
 pub mod token;
 
 use std::fmt;
 
 pub use layout::LayoutError;
 pub use lexer::{LexError, LexOptions};
+pub use parser::ParseError;
 pub use token::{Pos, Token, TokenKind};
 
 /// An error from any syntax stage, with a position.
@@ -54,12 +57,27 @@ impl From<LayoutError> for SyntaxError {
     }
 }
 
+impl From<ParseError> for SyntaxError {
+    fn from(e: ParseError) -> SyntaxError {
+        SyntaxError {
+            stage: "parse",
+            pos: e.pos,
+            message: e.message,
+        }
+    }
+}
+
 /// Lex a source file and apply the layout rule. The lexer options come
 /// from the file's `LANGUAGE` pragmas.
 pub fn tokenize(src: &str) -> Result<Vec<Token>, SyntaxError> {
     let opts = LexOptions::from_source(src);
     let tokens = lexer::lex(src, opts)?;
     Ok(layout::layout(tokens)?)
+}
+
+/// Parse a source file into a module.
+pub fn parse(src: &str) -> Result<ast::Module, SyntaxError> {
+    Ok(parser::parse_module(&tokenize(src)?)?)
 }
 
 #[cfg(test)]
@@ -84,10 +102,10 @@ mod tests {
         }
     }
 
-    /// Every vendored module must tokenize. The vendored tree is the
-    /// target; a module the lexer rejects is a bug in the lexer.
+    /// Every vendored module must parse. The vendored tree is the target;
+    /// a module the parser rejects is a bug in the parser.
     #[test]
-    fn vendored_tree_tokenizes() {
+    fn vendored_tree_parses() {
         let vendor = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor");
         let mut files = Vec::new();
         haskell_files(&vendor, &mut files);
@@ -99,7 +117,7 @@ mod tests {
         let mut failures = Vec::new();
         for path in &files {
             let src = std::fs::read_to_string(path).unwrap();
-            if let Err(e) = tokenize(&src) {
+            if let Err(e) = parse(&src) {
                 failures.push(format!("{}: {e}", path.display()));
             }
         }
