@@ -140,10 +140,12 @@ M3–M7 read 0.
   oracle also comes from the Nix shell; `AIHC_RESOLVE_ORACLE` overrides
   its path. `aihc-boot manifest`, `dump` and `oracle` show the three
   inputs of the comparison. aihc-resolve takes every primitive from the
-  outside. The list constructor `:` comes from `GHC.Types`. The terms
-  that desugaring uses (`fromInteger`, `>>=` and the others) come from
-  the modules that the manifest's `builtin` lines name. The list is
-  empty, because the boot `base` does not define these terms yet.
+  outside: the manifest's `builtin` lines name the modules whose exports
+  are in scope without an import. The syntax uses the list constructor
+  `:` and the terms that desugaring applies (`fromInteger`, `>>=` and the
+  others) from these modules. When `base` is a dependency, the manifest
+  names `GHC.Types`. The boot `base` does not define the desugaring terms
+  yet.
 - **The boot `base`** is in `vendor/base`. It is a small package that
   has only the names that the vendored tree uses. Its modules and names
   follow GHC's `base`, so the vendored tree also builds with GHC. GHC

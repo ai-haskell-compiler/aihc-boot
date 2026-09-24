@@ -32,8 +32,7 @@ module Main (main) where
 
 import Aihc.Parser (ParserConfig (..), defaultConfig, parseModule)
 import Aihc.Parser.Syntax
-  ( Extension,
-    ExtensionSetting (..),
+  ( ExtensionSetting (..),
     LanguageEdition (..),
     ModuleHeaderPragmas (..),
     Name (..),
