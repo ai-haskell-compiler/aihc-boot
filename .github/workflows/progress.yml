@@ -7,8 +7,12 @@ on:
     - cron: "17 3 * * *" # daily, 03:17 UTC
   workflow_dispatch:
 
+# The ruleset on main requires a pull request for each change, and a ruleset
+# cannot bypass GITHUB_TOKEN. The workflow pushes with a deploy key that is
+# in the bypass list of the ruleset. The secret PROGRESS_DEPLOY_KEY holds the
+# private key. See docs/PLAN.md, "Tooling".
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: progress
@@ -19,6 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.PROGRESS_DEPLOY_KEY }}
       - uses: cachix/install-nix-action@v31
       # Build the boot compiler here once it exists, so M3-M7 are measured
       # (boot.toml expects it at target/release/aihc-boot), e.g.:
