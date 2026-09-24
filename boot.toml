@@ -114,26 +114,30 @@ note = "Thin shim over the primitives in aihc-boot's base (deepseq and others im
 [packages.containers]
 plan = "simplify"
 source = "hackage"
+version = "0.7"
 used_by = ["*"]
-note = "Map, Set, IntMap, IntSet. Probably no Seq/Graph/Tree."
+note = "Cut down to the Map and Set functions the vendored tree uses. Version as in GHC 9.12. Do not re-vendor with --force."
 
 [packages.text]
 plan = "simplify"
 source = "hackage"
+version = "2.1.3"
 used_by = ["*"]
-note = "130 importing modules. Consider a simple UTF-8 array or String-backed Text."
+note = "Cut down to what the vendored tree uses, pure-haskell flag (no C, no simdutf). Version as in GHC 9.12. Do not re-vendor with --force."
 
 [packages.bytestring]
 plan = "simplify"
 source = "hackage"
+version = "0.12.2.0"
 used_by = ["*"]
-note = "Strict + Builder; likely no lazy ByteString."
+note = "Cut down to what the vendored tree uses, pure-haskell flag (no cbits). Version as in GHC 9.12. Do not re-vendor with --force."
 
 [packages.deepseq]
 plan = "simplify"
 source = "hackage"
+version = "1.5.1.0"
 used_by = ["aihc", "aihc-parser", "aihc-cpp", "aihc-resolve", "aihc-tc"]
-note = "NFData, deepseq, force, ($!!). No Generic deriving machinery."
+note = "NFData with its Generic default only. Version as in GHC 9.12. Do not re-vendor with --force."
 
 [packages.transformers]
 plan = "simplify"
@@ -155,8 +159,9 @@ note = "Interface/cache files and object writing."
 [packages.filepath]
 plan = "simplify"
 source = "hackage"
+version = "1.5.4.0"
 used_by = ["*"]
-note = "POSIX String paths only; drop OsPath."
+note = "POSIX String paths only, no OsPath. Version as in GHC 9.12. Do not re-vendor with --force."
 
 [packages.directory]
 plan = "replace"

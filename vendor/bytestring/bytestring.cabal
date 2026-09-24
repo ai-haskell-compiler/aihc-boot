@@ -1,0 +1,72 @@
+Cabal-Version:       2.2
+
+Name:                bytestring
+Version:             0.12.2.0
+Synopsis:            Fast, compact, strict and lazy byte strings with a list interface
+Description:
+    Cut down for aihc-boot: only the parts of strict and lazy
+    'ByteString', 'Data.ByteString.Char8' and 'Builder' that the vendored
+    tree uses. The C helpers are replaced by the Haskell versions of the
+    upstream @pure-haskell@ flag, so the package has no C sources.
+
+License:             BSD-3-Clause
+License-file:        LICENSE
+Category:            Data
+Copyright:           Copyright (c) Don Stewart          2005-2009,
+                               (c) Duncan Coutts        2006-2015,
+                               (c) David Roundy         2003-2005,
+                               (c) Jasper Van der Jeugt 2010,
+                               (c) Simon Meier          2010-2013.
+
+Author:              Don Stewart,
+                     Duncan Coutts
+Maintainer:          Haskell Bytestring Team <andrew.lelechenko@gmail.com>, Core Libraries Committee
+Homepage:            https://github.com/haskell/bytestring
+Bug-reports:         https://github.com/haskell/bytestring/issues
+Build-Type:          Simple
+
+library
+  default-language: Haskell2010
+  default-extensions:
+    BangPatterns
+    DeriveDataTypeable
+    DeriveGeneric
+    DeriveLift
+    FlexibleContexts
+    FlexibleInstances
+    LambdaCase
+    MagicHash
+    MultiWayIf
+    NamedFieldPuns
+    PatternSynonyms
+    RankNTypes
+    ScopedTypeVariables
+    StandaloneDeriving
+    TupleSections
+    TypeApplications
+    TypeOperators
+    UnboxedTuples
+
+  build-depends:   base >= 4.11 && < 5, ghc-prim, deepseq
+
+  exposed-modules: Data.ByteString
+                   Data.ByteString.Char8
+                   Data.ByteString.Unsafe
+                   Data.ByteString.Internal
+                   Data.ByteString.Lazy
+                   Data.ByteString.Lazy.Internal
+                   Data.ByteString.Short.Internal
+                   Data.ByteString.Builder
+                   Data.ByteString.Builder.Prim
+                   Data.ByteString.Builder.Internal
+                   Data.ByteString.Builder.Prim.Internal
+  other-modules:   Data.ByteString.Builder.Prim.Binary
+                   Data.ByteString.Internal.Pure
+                   Data.ByteString.Internal.Type
+                   Data.ByteString.ReadInt
+                   Data.ByteString.ReadNat
+                   Data.ByteString.Utils.ByteOrder
+                   Data.ByteString.Utils.UnalignedAccess
+
+  ghc-options:     -Wall -fwarn-tabs -Wincomplete-uni-patterns
+                   -O2
