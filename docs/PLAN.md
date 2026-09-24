@@ -135,9 +135,11 @@ M3–M7 read 0.
 
 The Rust workspace has one crate per stage, plus the binary:
 
-- `crates/aihc-syntax`: lexer, layout rule and parser. Its tests include
-  one that tokenizes every module under `vendor/`, so the lexer never
-  falls behind the target.
+- `crates/aihc-syntax`: lexer, layout rule, syntax tree and parser. Its
+  tests include one that parses every module under `vendor/`, so the
+  parser never falls behind the target. The parser handles the module
+  header, exports and imports. Top-level declarations are opaque token
+  runs until the parser grows to cover them.
 - `crates/aihc-boot`: the `aihc-boot` binary. It implements the command
   line contract above and reports every module as JSON. Failures carry
   an `error` field and, when known, the `line` and `col` of the first
