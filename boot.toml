@@ -9,6 +9,14 @@
 #             only the API aihc uses (vendor/<name>/ holds the replacement)
 #   drop      patch the packages in `used_by` so this dependency disappears
 #
+# include (optional) lists globs, relative to the package root, of the files
+# to keep after download. Everything else (tests, tools, docs) goes away.
+#
+# stanzas (optional) lists the .cabal stanzas that aihc-boot builds, for
+# example "library" or "executable aihc". The tracker ignores the
+# build-depends of all other stanzas. The default is all libraries and
+# executables.
+#
 # used_by lists the vendored packages that depend on it directly. A `drop` is
 # counted as done once every `used_by` package is vendored and none of their
 # .cabal files mention it any more.
@@ -33,6 +41,8 @@ source = "git"
 url = "https://github.com/ai-haskell-compiler/aihc"
 rev = "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05"
 subdir = "bin/aihc"
+stanzas = ["library", "executable aihc"]
+include = ["aihc.cabal", "LICENSE", "Setup.hs", "src", "exe", "compiler/*/src", "compiler/wasm/runtime"]
 note = "Library + `aihc` executable. Drop aihc-dev, the Custom Setup.hs and the GRIN interpreter."
 
 [packages.aihc-resolve]
@@ -41,6 +51,7 @@ source = "git"
 url = "https://github.com/ai-haskell-compiler/aihc"
 rev = "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05"
 subdir = "components/aihc-resolve"
+include = ["aihc-resolve.cabal", "LICENSE", "src"]
 used_by = ["aihc", "aihc-tc"]
 
 [packages.aihc-tc]
@@ -49,6 +60,8 @@ source = "git"
 url = "https://github.com/ai-haskell-compiler/aihc"
 rev = "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05"
 subdir = "components/aihc-tc"
+stanzas = ["library"]
+include = ["aihc-tc.cabal", "LICENSE", "src", "prim-wiring"]
 used_by = ["aihc"]
 note = "Also provides prim-wiring/, which aihc lists in hs-source-dirs."
 
@@ -58,6 +71,7 @@ source = "git"
 url = "https://github.com/ai-haskell-compiler/aihc"
 rev = "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05"
 subdir = "tooling/aihc-package-plan"
+include = ["aihc-package-plan.cabal", "LICENSE", "src"]
 used_by = ["aihc"]
 
 [packages.aihc-hackage]
@@ -74,6 +88,7 @@ plan = "keep"
 source = "git"
 url = "https://github.com/ai-haskell-compiler/aihc-parser"
 rev = "46420da73d505555b46c03c00bd7fe44cb72e331"
+include = ["aihc-parser.cabal", "LICENSE", "src"]
 used_by = ["aihc", "aihc-resolve", "aihc-tc", "aihc-package-plan"]
 
 [packages.aihc-cpp]
@@ -81,6 +96,7 @@ plan = "keep"
 source = "git"
 url = "https://github.com/ai-haskell-compiler/aihc-cpp"
 rev = "ea9c5fb1532cd4c3e8a3b39304372226b7f7dcaa"
+include = ["aihc-cpp.cabal", "LICENSE", "src"]
 used_by = ["aihc", "aihc-package-plan"]
 
 # --- Boot libraries (normally shipped with GHC) -----------------------------
