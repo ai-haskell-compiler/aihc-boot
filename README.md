@@ -15,7 +15,7 @@ Updated daily by [a scheduled workflow](.github/workflows/progress.yml);
 history in [progress/history.csv](progress/history.csv).
 
 <!-- progress:start -->
-_Last change in progress: 2026-09-24. Boot compiler: not built yet (M3–M7 read 0)._
+_Last change in progress: 2026-09-24. Boot compiler: built._
 
 | Milestone | Done | Progress |
 | --- | ---: | --- |
