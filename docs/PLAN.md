@@ -163,3 +163,12 @@ more thing the Nix build has to fetch.
 - `nix flake check` runs the tracker on a clean checkout, and builds,
   tests, lints (`clippy`) and format-checks (`rustfmt`) the Rust
   workspace.
+- The progress workflow pushes to `main` with a deploy key, because a
+  ruleset cannot bypass `GITHUB_TOKEN`. To set up the key:
+  1. Run `ssh-keygen -t ed25519 -N "" -C progress -f progress_key`.
+  2. Add `progress_key.pub` as a deploy key with write access (Settings →
+     Deploy keys).
+  3. Add the contents of `progress_key` as the repository secret
+     `PROGRESS_DEPLOY_KEY` (Settings → Secrets and variables → Actions).
+  4. Add "Deploy keys" to the bypass list of the ruleset on `main`.
+  5. Delete the two local key files.
