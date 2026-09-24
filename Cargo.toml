@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/aihc-syntax", "crates/aihc-boot"]
+members = ["crates/aihc-syntax", "crates/aihc-resolve", "crates/aihc-boot"]
 
 [workspace.package]
 version = "0.1.0"

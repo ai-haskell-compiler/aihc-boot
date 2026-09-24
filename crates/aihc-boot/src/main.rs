@@ -5,6 +5,13 @@
 //!
 //! - `aihc-boot check --stage STAGE --package NAME`: check every module
 //!   of `vendor/NAME/` up to `STAGE` and print one JSON object per module.
+//! - `aihc-boot manifest --package NAME`: print the manifest that
+//!   `tools/resolve-oracle` reads for the package. For debugging.
+//! - `aihc-boot dump --stage resolve --package NAME`: print our
+//!   resolution records of every module of the package. For debugging.
+//! - `aihc-boot oracle --stage resolve --package NAME`: run the oracle on
+//!   the package and print its records in the same form, so the two
+//!   outputs `diff`. For debugging.
 //! - `aihc-boot lex FILE`: print the tokens of one file, after layout.
 //!   For debugging.
 //! - `aihc-boot parse FILE`: print the syntax tree of one file. For
@@ -13,14 +20,21 @@
 //!   This is what `check` sends to the reference parser.
 //! - `aihc-boot run FILE.hs`: not implemented yet.
 
+mod manifest;
+
 use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use aihc_resolve::record::{Dump, ModuleRecords};
+
 const USAGE: &str = "\
 usage:
   aihc-boot check --stage {parse|resolve|typecheck} --package NAME
+  aihc-boot manifest --package NAME
+  aihc-boot dump --stage resolve --package NAME
+  aihc-boot oracle --stage resolve --package NAME
   aihc-boot lex FILE
   aihc-boot parse FILE
   aihc-boot print FILE
@@ -31,6 +45,9 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("check") => check(&args[1..]),
+        Some("manifest") => print_manifest(&args[1..]),
+        Some("dump") => dump(&args[1..]),
+        Some("oracle") => oracle(&args[1..]),
         Some("lex") => lex(&args[1..]),
         Some("parse") => parse(&args[1..]),
         Some("print") => print(&args[1..]),
@@ -66,30 +83,37 @@ fn take_option(args: &mut Vec<String>, name: &str) -> Result<String, String> {
     Ok(args.remove(i))
 }
 
-// --- check -----------------------------------------------------------------
-
-fn check(args: &[String]) -> Result<(), String> {
+/// `--stage` and `--package`, and the package directory.
+fn stage_and_package(
+    args: &[String],
+    stages: &[&str],
+) -> Result<(String, String, PathBuf), String> {
     let mut args = args.to_vec();
     let stage = take_option(&mut args, "--stage")?;
     let package = take_option(&mut args, "--package")?;
     if let Some(extra) = args.first() {
         return Err(format!("unexpected argument {extra}"));
     }
-    if !matches!(stage.as_str(), "parse" | "resolve" | "typecheck") {
+    if !stages.contains(&stage.as_str()) {
         return Err(format!("unknown stage {stage}"));
     }
-    let pkg_dir = PathBuf::from("vendor").join(&package);
+    let pkg_dir = manifest::package_dir(&package);
     if !pkg_dir.is_dir() {
         return Err(format!("{} is not a directory", pkg_dir.display()));
     }
-    let mut files = Vec::new();
-    haskell_files(&pkg_dir, &pkg_dir, &mut files);
-    files.sort();
+    Ok((stage, package, pkg_dir))
+}
+
+// --- check -----------------------------------------------------------------
+
+fn check(args: &[String]) -> Result<(), String> {
+    let (stage, package, pkg_dir) = stage_and_package(args, &["parse", "resolve", "typecheck"])?;
     let reference = Reference::for_package(&pkg_dir);
+    let mut oracle = Oracle::new(&package);
     let mut stdout = std::io::stdout().lock();
     let mut out = String::new();
-    for file in files {
-        let report = check_module(&file, &stage, &reference);
+    for file in manifest::haskell_files(&pkg_dir) {
+        let report = check_module(&file, &stage, &reference, &mut oracle);
         out.clear();
         write!(
             out,
@@ -141,8 +165,73 @@ impl Reference {
             .or_else(|| find_in_path("aihc-parse"));
         Reference {
             command,
-            flags: cabal_language_flags(pkg_dir),
+            flags: manifest::CabalPackage::read(pkg_dir)
+                .map(|p| p.ghc_flags())
+                .unwrap_or_default(),
         }
+    }
+}
+
+/// The reference resolver, `resolve-oracle` from `tools/resolve-oracle`,
+/// run once per package on first use.
+struct Oracle {
+    package: String,
+    command: Option<PathBuf>,
+    dump: Option<Result<Dump, String>>,
+}
+
+impl Oracle {
+    fn new(package: &str) -> Oracle {
+        Oracle {
+            package: package.to_string(),
+            command: std::env::var_os("AIHC_RESOLVE_ORACLE")
+                .map(PathBuf::from)
+                .or_else(|| find_in_path("resolve-oracle")),
+            dump: None,
+        }
+    }
+
+    /// The oracle's records for the package.
+    fn dump(&mut self) -> &Result<Dump, String> {
+        if self.dump.is_none() {
+            self.dump = Some(self.run());
+        }
+        self.dump.as_ref().unwrap()
+    }
+
+    fn run(&self) -> Result<Dump, String> {
+        let Some(command) = &self.command else {
+            return Err(
+                "resolve-oracle not found: set AIHC_RESOLVE_ORACLE or add it to PATH".into(),
+            );
+        };
+        let manifest = manifest::manifest(&self.package)?;
+        let mut child = std::process::Command::new(command)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("cannot run {}: {e}", command.display()))?;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(manifest.as_bytes())
+            .map_err(|e| format!("cannot write to {}: {e}", command.display()))?;
+        let output = child
+            .wait_with_output()
+            .map_err(|e| format!("cannot run {}: {e}", command.display()))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let first = stderr
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("")
+                .trim();
+            return Err(format!("{} failed: {first}", command.display()));
+        }
+        Dump::parse(&String::from_utf8_lossy(&output.stdout))
+            .map_err(|e| format!("cannot read the output of {}: {e}", command.display()))
     }
 }
 
@@ -153,77 +242,20 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// `-X` flags for `default-language` and `default-extensions` in the
-/// package's `.cabal` file. The scan is line based: it reads the first
-/// value of each field and the continuation lines of
-/// `default-extensions`.
-fn cabal_language_flags(pkg_dir: &Path) -> Vec<String> {
-    let mut flags = Vec::new();
-    let Ok(entries) = std::fs::read_dir(pkg_dir) else {
-        return flags;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|e| e != "cabal") {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let mut in_extensions = false;
-        for line in text.lines() {
-            let trimmed = line.trim();
-            let lower = trimmed.to_ascii_lowercase();
-            if let Some(value) = lower.strip_prefix("default-language:") {
-                in_extensions = false;
-                let value = value.trim();
-                if !value.is_empty()
-                    && !flags
-                        .iter()
-                        .any(|f: &String| f == &format!("-X{}", trimmed[17..].trim()))
-                {
-                    flags.push(format!("-X{}", trimmed[17..].trim()));
-                }
-            } else if let Some(value) = lower.strip_prefix("default-extensions:") {
-                in_extensions = true;
-                push_extensions(&mut flags, &trimmed[19..], value.is_empty());
-            } else if in_extensions
-                && line.starts_with(char::is_whitespace)
-                && !trimmed.is_empty()
-                && !trimmed.contains(':')
-            {
-                push_extensions(&mut flags, trimmed, false);
-            } else {
-                in_extensions = false;
-            }
-        }
-    }
-    flags
-}
-
-fn push_extensions(flags: &mut Vec<String>, value: &str, _empty: bool) {
-    for ext in value.split(|c: char| c == ',' || c.is_whitespace()) {
-        let ext = ext.trim();
-        if !ext.is_empty() {
-            let flag = format!("-X{ext}");
-            if !flags.contains(&flag) {
-                flags.push(flag);
-            }
-        }
-    }
-}
-
-fn check_module(file: &Path, stage: &str, reference: &Reference) -> Report {
-    let src = match std::fs::read_to_string(file) {
-        Ok(src) => src,
-        Err(e) => return Report::fail(format!("cannot read file: {e}"), None),
-    };
+fn read_module(file: &Path) -> Result<aihc_syntax::ast::Module, Report> {
+    let src = std::fs::read_to_string(file)
+        .map_err(|e| Report::fail(format!("cannot read file: {e}"), None))?;
     if file.extension().is_some_and(|e| e == "lhs") {
-        return Report::fail("literate Haskell is not supported", None);
+        return Err(Report::fail("literate Haskell is not supported", None));
     }
-    let module = match aihc_syntax::parse(&src) {
+    aihc_syntax::parse(&src)
+        .map_err(|e| Report::fail(format!("{}: {}", e.stage, e.message), Some(e.pos)))
+}
+
+fn check_module(file: &Path, stage: &str, reference: &Reference, oracle: &mut Oracle) -> Report {
+    let module = match read_module(file) {
         Ok(module) => module,
-        Err(e) => return Report::fail(format!("{}: {}", e.stage, e.message), Some(e.pos)),
+        Err(report) => return report,
     };
     // The round trip: aihc-parser must read the printed module as the
     // original.
@@ -264,38 +296,42 @@ fn check_module(file: &Path, stage: &str, reference: &Reference) -> Report {
         }
         Err(e) => return Report::fail(format!("cannot run {}: {e}", command.display()), None),
     }
-    if stage != "parse" {
+    if stage == "parse" {
+        return Report {
+            ok: true,
+            error: None,
+            pos: None,
+        };
+    }
+    // Resolve: our records must agree with the oracle's.
+    let ours = match aihc_resolve::resolve_module(&module) {
+        Ok(ours) => ours,
+        Err(e) => return Report::fail(e.message, e.pos),
+    };
+    let theirs = match oracle.dump() {
+        Ok(dump) => dump.modules.get(&file.display().to_string()),
+        Err(e) => return Report::fail(format!("oracle: {e}"), None),
+    };
+    let Some(theirs) = theirs else {
+        return Report::fail("oracle: no record for this module", None);
+    };
+    if let Some(message) = &theirs.error {
+        return Report::fail(format!("oracle: {message}"), None);
+    }
+    if let Err(d) = aihc_resolve::compare(&ours, &theirs.occurrences) {
+        let pos = aihc_syntax::Pos {
+            line: d.span.start_line,
+            col: d.span.start_col,
+        };
+        return Report::fail(format!("resolve: {}: {}", d.span, d.message), Some(pos));
+    }
+    if stage != "resolve" {
         return Report::fail(format!("stage {stage} is not implemented yet"), None);
     }
     Report {
         ok: true,
         error: None,
         pos: None,
-    }
-}
-
-/// Every Haskell source in a package, with the same rules as
-/// `scripts/progress.py`: any `.hs`, `.lhs`, `.hsc` or `.hs-boot` file,
-/// except `Setup.hs` at the package root.
-fn haskell_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            haskell_files(root, &path, out);
-            continue;
-        }
-        let is_haskell = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| matches!(e, "hs" | "lhs" | "hsc" | "hs-boot"));
-        let is_setup =
-            path.parent() == Some(root) && path.file_stem().is_some_and(|s| s == "Setup");
-        if is_haskell && !is_setup {
-            out.push(path);
-        }
     }
 }
 
@@ -315,6 +351,55 @@ fn json_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+// --- manifest, dump and oracle ---------------------------------------------
+
+fn print_manifest(args: &[String]) -> Result<(), String> {
+    let mut args = args.to_vec();
+    let package = take_option(&mut args, "--package")?;
+    if let Some(extra) = args.first() {
+        return Err(format!("unexpected argument {extra}"));
+    }
+    let text = manifest::manifest(&package)?;
+    let mut stdout = std::io::stdout().lock();
+    write!(stdout, "{text}").map_err(|e| e.to_string())
+}
+
+fn dump(args: &[String]) -> Result<(), String> {
+    let (_stage, _package, pkg_dir) = stage_and_package(args, &["resolve"])?;
+    let mut dump = Dump::default();
+    for file in manifest::haskell_files(&pkg_dir) {
+        let records = match read_module(&file).map(|m| aihc_resolve::resolve_module(&m)) {
+            Ok(Ok(occurrences)) => ModuleRecords {
+                error: None,
+                occurrences,
+            },
+            Ok(Err(e)) => ModuleRecords {
+                error: Some(e.message),
+                occurrences: Vec::new(),
+            },
+            Err(report) => ModuleRecords {
+                error: report.error,
+                occurrences: Vec::new(),
+            },
+        };
+        dump.modules.insert(file.display().to_string(), records);
+    }
+    let mut text = String::new();
+    dump.write(&mut text);
+    let mut stdout = std::io::stdout().lock();
+    write!(stdout, "{text}").map_err(|e| e.to_string())
+}
+
+fn oracle(args: &[String]) -> Result<(), String> {
+    let (_stage, package, _pkg_dir) = stage_and_package(args, &["resolve"])?;
+    let mut oracle = Oracle::new(&package);
+    let dump = oracle.dump().as_ref().map_err(|e| format!("oracle: {e}"))?;
+    let mut text = String::new();
+    dump.write(&mut text);
+    let mut stdout = std::io::stdout().lock();
+    write!(stdout, "{text}").map_err(|e| e.to_string())
 }
 
 // --- parse -----------------------------------------------------------------

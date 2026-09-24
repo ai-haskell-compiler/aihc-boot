@@ -1,18 +1,13 @@
 [package]
-name = "aihc-boot"
-description = "A minimal Haskell compiler whose only job is to build aihc"
+name = "aihc-resolve"
+description = "Name resolution for aihc-boot, checked against aihc-resolve"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "aihc-boot"
-path = "src/main.rs"
-
 [dependencies]
 aihc-syntax = { path = "../aihc-syntax" }
-aihc-resolve = { path = "../aihc-resolve" }
 
 [lints]
 workspace = true

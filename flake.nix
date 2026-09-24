@@ -30,10 +30,52 @@
         '';
       };
 
+    # The reference resolver: aihc-resolve from the vendored tree, run over
+    # the vendored tree. `aihc-boot check --stage resolve` counts a module
+    # as resolved only when its own resolution of the module is equal to
+    # the oracle's. The two library packages come from `vendor/`, so the
+    # oracle follows the pinned aihc revision. Their tests need packages
+    # the tree does not have, so the tests are off.
+    resolveOracle = pkgs: let
+      hs = pkgs.haskell.packages.ghc912;
+      aihc-parser = hs.mkDerivation {
+        pname = "aihc-parser";
+        version = "0";
+        src = ./vendor/aihc-parser;
+        isLibrary = true;
+        isExecutable = false;
+        doCheck = false;
+        doHaddock = false;
+        libraryHaskellDepends = with hs; [base bytestring containers deepseq megaparsec prettyprinter text];
+        license = pkgs.lib.licenses.unlicense;
+      };
+      aihc-resolve = hs.mkDerivation {
+        pname = "aihc-resolve";
+        version = "0";
+        src = ./vendor/aihc-resolve;
+        isLibrary = true;
+        isExecutable = false;
+        doCheck = false;
+        doHaddock = false;
+        libraryHaskellDepends = with hs; [aihc-parser base containers deepseq text];
+        license = pkgs.lib.licenses.unlicense;
+      };
+    in
+      hs.mkDerivation {
+        pname = "resolve-oracle";
+        version = "0.1.0";
+        src = ./tools/resolve-oracle;
+        isLibrary = false;
+        isExecutable = true;
+        doHaddock = false;
+        executableHaskellDepends = with hs; [aihc-parser aihc-resolve base bytestring containers text];
+        license = pkgs.lib.licenses.mit;
+      };
+
     # Just enough to run the progress tracker (used by the scheduled
-    # workflow). The reference parser is part of it, because M3 counts
-    # modules through it.
-    trackerTools = pkgs: [pkgs.python3 pkgs.git pkgs.bash (aihcParse pkgs)];
+    # workflow). The two reference tools are part of it, because M3 and M4
+    # count modules through them.
+    trackerTools = pkgs: [pkgs.python3 pkgs.git pkgs.bash (aihcParse pkgs) (resolveOracle pkgs)];
 
     # The boot compiler itself. `cargoLock` reads the committed Cargo.lock,
     # so the build is reproducible and works without network access.
@@ -80,6 +122,7 @@
       default = aihcBoot pkgs;
       aihc-boot = aihcBoot pkgs;
       aihc-parse = aihcParse pkgs;
+      resolve-oracle = resolveOracle pkgs;
     });
 
     apps = forAllSystems (pkgs: {
