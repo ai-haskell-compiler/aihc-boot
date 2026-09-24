@@ -1,0 +1,736 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+module Aihc.Cli.BuildModule
+  ( ExecutableInputs (..),
+    InstalledPackage (..),
+    LinkBundle (..),
+    PackageConstraint (..),
+    dependencyConstraint,
+    finishExecutable,
+    generatedEntryText,
+    implicitConstraint,
+    installedPackage,
+    linkBundleManifestPath,
+    plannedPackage,
+    requirePackageArchive,
+    runBuildModule,
+    runLinkExe,
+    validateSelectedPackageNames,
+  )
+where
+
+import Aihc.Cli.Backend (compileEntryObject)
+import Aihc.Cli.CapiStub (noCapiStubOptions)
+import Aihc.Cli.CompilerHeaders (cabalPlatformForTarget, ensureCompilerHeaders)
+import Aihc.Cli.Install
+  ( InstallLocations (..),
+    InstallResult (..),
+    ModuleCompileConfig (..),
+    ModuleCompileRequest (..),
+    ModuleCompileResult (..),
+    archiveHasMembers,
+    buildEnvironmentIdentity,
+    compileModules,
+    installPlanPackages,
+    planRequestFor,
+  )
+import Aihc.Cli.Install qualified as Install
+import Aihc.Cli.Lto (compileLtoProgram, moduleCorePath)
+import Aihc.Cli.OptimizationPlan (OptimizationPlan (..), optimizationPlan)
+import Aihc.Cli.Options (BuildOptions (..), LinkExeOptions (..))
+import Aihc.Cli.PackageManifest (PackageManifest (..))
+import Aihc.Cli.Store (defaultStoreRoot)
+import Aihc.Hackage.Cabal qualified as HackageCabal
+import Aihc.Hackage.IndexCache (defaultIndexOptions, newHackageIndex)
+import Aihc.Native (NativeTarget (..), WasmSysroot (..), backendCompiler, cxxStandardLibraryArguments, nativeTargetStoreDirectory, parseNativeTarget, readWasmClangProcessWithExitCode, renderNativeTarget, wasmSysroot)
+import Aihc.PackagePlan (PackagePlan, PlanRequest (..), PlannedPackages (..), canonicalPackageName, planPackages)
+import Aihc.Parser (ParserConfig (..), defaultConfig, parseModule)
+import Aihc.Parser.Syntax
+  ( Extension (ImplicitPrelude),
+    ImportDecl (..),
+    LanguageEdition (Haskell98Edition),
+    effectiveExtensions,
+    headerExtensionSettings,
+    headerLanguageEdition,
+    moduleName,
+  )
+import Aihc.Parser.Syntax qualified as Syntax
+import Aihc.Parser.Token (readModuleHeaderPragmas)
+import Aihc.Resolve (Package (..), PackageId (..))
+import Aihc.Wasm (wasip3WorldPath)
+import Control.Exception (bracket)
+import Control.Monad (filterM, foldM, forM, forM_, unless, when)
+import Data.Aeson ((.:), (.=))
+import Data.Aeson qualified as Aeson
+import Data.ByteString.Lazy qualified as BL
+import Data.List (isInfixOf, isPrefixOf, isSuffixOf, nub, sortOn)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe, isNothing, mapMaybe)
+import Data.Set qualified as Set
+import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Distribution.Package (PackageName, mkPackageName, unPackageName)
+import Distribution.Parsec (simpleParsec)
+import Distribution.Types.Dependency (Dependency (..))
+import Distribution.Version (VersionRange)
+import System.Directory
+  ( copyFile,
+    createDirectory,
+    createDirectoryIfMissing,
+    doesDirectoryExist,
+    doesFileExist,
+    getCurrentDirectory,
+    getTemporaryDirectory,
+    listDirectory,
+    removeDirectoryRecursive,
+    removeFile,
+  )
+import System.Exit (ExitCode (..))
+import System.FilePath (dropExtension, takeDirectory, takeFileName, (</>))
+import System.IO (hClose, openTempFile)
+import System.Process (readProcessWithExitCode)
+
+data InstalledPackage = InstalledPackage
+  { installedManifest :: !PackageManifest,
+    installedRoot :: !FilePath
+  }
+
+data PackageConstraint = PackageConstraint
+  { constraintName :: !Text,
+    constraintRange :: !VersionRange
+  }
+
+data SourceModule = SourceModule
+  { sourcePath :: !FilePath,
+    sourceModuleName :: !Text,
+    sourceDependencies :: ![SourceDependency]
+  }
+
+data SourceDependency = SourceDependency
+  { sourceDependencyPackage :: !(Maybe Text),
+    sourceDependencyModule :: !Text
+  }
+  deriving (Eq, Ord, Show)
+
+data InstalledModule = InstalledModule
+  { installedModulePackage :: !InstalledPackage,
+    installedModuleName :: !Text
+  }
+
+type InstalledModuleIndex = Map.Map Text [InstalledModule]
+
+-- | Build one executable from its main module and return the path of the
+-- executable, or of its link bundle.
+runBuildModule :: BuildOptions -> IO FilePath
+runBuildModule options = do
+  storeRoot <- maybe defaultStoreRoot pure (buildStoreRoot options)
+  currentDirectory <- getCurrentDirectory
+  let target = buildTarget options
+      targetDirectory = nativeTargetStoreDirectory target
+      localBuildRoot = fromMaybe (currentDirectory </> ".aihc-target") (buildBuildRoot options)
+      buildRoot = localBuildRoot </> targetDirectory
+      sourceDirectories = case buildSourceDirectories options of [] -> ["."]; values -> values
+      output = fromMaybe (dropExtension (buildInput options)) (buildOutput options)
+  buildIdentity <- buildEnvironmentIdentity target
+  headerDirectory <- ensureCompilerHeaders target buildRoot
+  let plan = optimizationPlan (buildLto options) (buildOptimization options)
+      compileConfig =
+        ModuleCompileConfig
+          { compileBuildIdentity = buildIdentity,
+            compileKeepCore = buildKeepCore options,
+            compileKeepGrin = buildKeepGrin options,
+            compileKeepLir = buildKeepLir options,
+            compileKeepNative = buildKeepNative options,
+            compileLint = buildLint options,
+            compileCheckPrimBounds = buildCheckPrimBounds options,
+            compileLto = planWholeProgram plan,
+            compilePasses = planPasses plan,
+            compileGrinPointsTo = planGrinPointsTo plan,
+            compileNoCode = False,
+            compileOptimization = buildOptimization options,
+            compileTarget = target,
+            compileHeaderDirectory = headerDirectory,
+            compileVerbose = when (buildVerbose options) . putStrLn,
+            compilePrintTimings = const (pure ()),
+            compileUseColor = False
+          }
+      -- The installed packages of an executable are built the way
+      -- @install@ builds them. The flags that keep the output of a phase
+      -- name the modules of the executable alone, so a dependency already
+      -- in the store is never rejected for lacking those outputs.
+      dependencyConfig =
+        compileConfig
+          { compileKeepCore = False,
+            compileKeepGrin = False,
+            compileKeepLir = False,
+            compileKeepNative = False
+          }
+  constraints <- mapM parsePackageConstraint (buildPackageConstraints options)
+  -- The packages of an executable are installed like any other: the plan
+  -- names them, their fingerprints name the store directories, and a
+  -- directory that is absent is built. Nothing lists the store. A main
+  -- module has no cabal file, so its lock lives in the working directory.
+  hackageIndex <- newHackageIndex defaultIndexOptions
+  request <- planRequestFor hackageIndex (buildPlanOptions options) (cabalPlatformForTarget target) (maybe [] pure (buildWorkspace options)) (Just currentDirectory) (when (buildVerbose options) . putStrLn)
+  let goals =
+        [ (canonicalPackageName (mkPackageName (T.unpack (constraintName constraint))), constraintRange constraint)
+        | constraint <- constraints <> map implicitConstraint ["aihc-base", "aihc-prim"]
+        ]
+      locations =
+        InstallLocations
+          { locationStoreRoot = storeRoot </> targetDirectory,
+            locationBuildRoot = buildRoot,
+            locationImmutable = True,
+            locationReinstall = False
+          }
+  planned <- planPackages request {requestGoals = goals}
+  plans <- mapM (plannedPackage planned . fst) goals
+  installed <- installPlanPackages dependencyConfig locations plans
+  let selected = map installedPackage installed
+  validateSelectedPackageNames selected
+  mapM_ requirePackageArchive selected
+  let moduleIndex = buildInstalledModuleIndex selected
+  sources <- discoverSources sourceDirectories moduleIndex (buildInput options)
+  validateInstalledDependencies moduleIndex sources
+  sourceFiles <- materializeSourceFiles buildRoot selected sources
+  let compileRequest =
+        ModuleCompileRequest
+          { compileOutputRoot = buildRoot,
+            compilePackageRoot = currentDirectory,
+            compilePackage = Package "exe" (PackageId "exe"),
+            compileSourceFiles = sourceFiles,
+            compileDependencies = installed,
+            -- The compiler adds the dependency headers to these options.
+            compileCapiStubOptions = noCapiStubOptions
+          }
+  compiled <- compileModules compileConfig compileRequest
+  finishExecutable
+    compileConfig
+    ExecutableInputs
+      { executableStoreRoot = storeRoot,
+        executableNoLink = buildNoLink options,
+        executableOutput = output,
+        executableBuildRoot = buildRoot,
+        executableModules = compiled,
+        executableExtraObjects = [],
+        executableCxxStdLib = False,
+        executablePackages = selected
+      }
+  pure output
+
+-- | What the final step of an executable takes: the compiled modules, the
+-- objects that join them, the installed packages, and where the result
+-- goes.
+data ExecutableInputs = ExecutableInputs
+  { executableStoreRoot :: !FilePath,
+    -- | Write a link bundle instead of linking.
+    executableNoLink :: !Bool,
+    -- | The executable, or the bundle directory.
+    executableOutput :: !FilePath,
+    -- | Where the modules of the executable were compiled, and where a
+    -- @--lto@ build writes the program object.
+    executableBuildRoot :: !FilePath,
+    executableModules :: !ModuleCompileResult,
+    -- | Objects of the executable beyond its modules, such as its own C
+    -- sources.
+    executableExtraObjects :: ![FilePath],
+    -- | The executable has C++ sources of its own, so its link needs the
+    -- C++ standard library whether or not a package of its does.
+    executableCxxStdLib :: !Bool,
+    executablePackages :: ![InstalledPackage]
+  }
+
+-- | Turn the objects of the modules of an executable and its installed
+-- packages into the executable, or into a link bundle when the link is
+-- deferred. The runtime is the @aihc-rts@ package among the installed
+-- packages; the entry unit is generated beside the module objects.
+finishExecutable :: ModuleCompileConfig -> ExecutableInputs -> IO ()
+finishExecutable compileConfig inputs = do
+  let target = compileTarget compileConfig
+      output = executableOutput inputs
+      buildRoot = executableBuildRoot inputs
+      compiled = executableModules inputs
+      packages = executablePackages inputs
+  createDirectoryIfMissing True buildRoot
+  let entry = buildRoot </> "entry.o"
+  compileEntryObject target buildRoot entry
+  -- A @--lto@ build compiles the System FC of every module of the program,
+  -- from the packages and the executable alike, into one object. The
+  -- package archives then hold only their C and capi wrapper objects.
+  programObjects <-
+    if compileLto compileConfig
+      then do
+        let corePaths =
+              [ moduleCorePath target (installedRoot package) name
+              | package <- packages,
+                name <- packageManifestCompiledModules (installedManifest package)
+              ]
+                <> [moduleCorePath target buildRoot name | name <- compileModuleNames compiled]
+        object <- compileLtoProgram compileConfig buildRoot corePaths
+        pure [object]
+      else pure []
+  createDirectoryIfMissing True (takeDirectory output)
+  let orderedPackages = linkOrderedPackages packages
+  cObjects <- fmap concat (mapM packageCObjects orderedPackages)
+  let objects = programObjects <> compileObjectPaths compiled <> [entry] <> executableExtraObjects inputs <> cObjects
+  -- A package whose archive holds no member is left out of the link: a
+  -- @--lto@ build leaves the archive of a package without C sources empty,
+  -- and so does a package whose modules are all empty standins.
+  archives <- filterM archiveHasMembers (map packageArchive orderedPackages)
+  -- A package with cxx-sources says so in its manifest, and its objects
+  -- need the C++ standard library however the program reaches them.
+  let cxxStdLib = executableCxxStdLib inputs || any (packageManifestCxxStdLib . installedManifest) orderedPackages
+  if executableNoLink inputs
+    then writeLinkBundle target output cxxStdLib objects archives
+    else linkExecutable target output cxxStdLib objects archives
+
+-- | The plan of one package, which the solver must have chosen.
+plannedPackage :: PlannedPackages -> PackageName -> IO PackagePlan
+plannedPackage planned name =
+  maybe
+    (ioError (userError ("The dependency plan has no package " <> unPackageName name)))
+    pure
+    (Map.lookup (canonicalPackageName name) (plannedPlans planned))
+
+installedPackage :: Install.InstalledPackage -> InstalledPackage
+installedPackage package =
+  InstalledPackage (Install.installedManifest package) (installStorePath (Install.installedResult package))
+
+validateSelectedPackageNames :: [InstalledPackage] -> IO ()
+validateSelectedPackageNames selected =
+  forM_ (Map.toList packagesByName) $ \(name, packages) ->
+    case packages of
+      [_] -> pure ()
+      _ -> ioError (userError ("The dependency plan selects more than one build of " <> T.unpack name))
+  where
+    packagesByName =
+      Map.fromListWith
+        (<>)
+        [ (packageManifestName (installedManifest package), [package])
+        | package <- selected
+        ]
+
+-- | Everything the final link of an executable consumes, with paths relative
+-- to the bundle directory. The bundle is self-contained, so a machine that
+-- cannot run the compiler, or that lacks the linker for the target the
+-- compiler ran on, can still produce the executable with @link-exe@.
+--
+-- Schema 3 adds whether the link needs the C++ standard library. Schema 2
+-- lists objects and archives only. Schema 1 also named an entry and a
+-- runtime archive, which are now an object among the objects and the
+-- archive and C objects of the @aihc-rts@ package.
+data LinkBundle = LinkBundle
+  { linkBundleTarget :: !NativeTarget,
+    -- | An input was compiled from @cxx-sources@, so the link adds the
+    -- C++ standard library of the target.
+    linkBundleCxxStdLib :: !Bool,
+    linkBundleObjects :: ![FilePath],
+    linkBundleArchives :: ![FilePath]
+  }
+  deriving (Eq, Show)
+
+instance Aeson.ToJSON LinkBundle where
+  toJSON bundle =
+    Aeson.object
+      [ "schemaVersion" .= (3 :: Int),
+        "target" .= renderNativeTarget (linkBundleTarget bundle),
+        "cxxStdLib" .= linkBundleCxxStdLib bundle,
+        "objects" .= linkBundleObjects bundle,
+        "archives" .= linkBundleArchives bundle
+      ]
+
+instance Aeson.FromJSON LinkBundle where
+  parseJSON = Aeson.withObject "LinkBundle" $ \object -> do
+    schemaVersion <- object .: "schemaVersion"
+    case schemaVersion :: Int of
+      2 -> do
+        target <- object .: "target" >>= either fail pure . parseNativeTarget
+        LinkBundle target False
+          <$> object .: "objects"
+          <*> object .: "archives"
+      3 -> do
+        target <- object .: "target" >>= either fail pure . parseNativeTarget
+        LinkBundle target
+          <$> object .: "cxxStdLib"
+          <*> object .: "objects"
+          <*> object .: "archives"
+      _ -> fail "unsupported link bundle schema"
+
+linkBundleManifestPath :: FilePath -> FilePath
+linkBundleManifestPath bundle = bundle </> "link.json"
+
+-- | Copy the link inputs into the bundle directory and describe them in the
+-- manifest. Each copy carries its position in the link order as a prefix, so
+-- inputs from different packages that share a file name never collide.
+writeLinkBundle :: NativeTarget -> FilePath -> Bool -> [FilePath] -> [FilePath] -> IO ()
+writeLinkBundle target bundle cxxStdLib objects archives = do
+  let inputs = bundle </> "inputs"
+  createDirectoryIfMissing True inputs
+  copied <- forM (zip [0 :: Int ..] (objects <> archives)) $ \(index, source) -> do
+    let name = padIndex index <> "-" <> takeFileName source
+    copyFile source (inputs </> name)
+    pure ("inputs" </> name)
+  let (copiedObjects, copiedArchives) = splitAt (length objects) copied
+  BL.writeFile
+    (linkBundleManifestPath bundle)
+    ( Aeson.encode
+        LinkBundle
+          { linkBundleTarget = target,
+            linkBundleCxxStdLib = cxxStdLib,
+            linkBundleObjects = copiedObjects,
+            linkBundleArchives = copiedArchives
+          }
+    )
+  where
+    padIndex index = replicate (4 - length (show index)) '0' <> show index
+
+runLinkExe :: LinkExeOptions -> IO ()
+runLinkExe options = do
+  let bundle = linkExeBundle options
+      manifest = linkBundleManifestPath bundle
+      output = linkExeOutputFile options
+  exists <- doesFileExist manifest
+  unless exists (ioError (userError ("No link bundle manifest at " <> manifest)))
+  decoded <- Aeson.eitherDecode <$> BL.readFile manifest
+  LinkBundle {linkBundleTarget, linkBundleCxxStdLib, linkBundleObjects, linkBundleArchives} <-
+    either (ioError . userError . (("Invalid link bundle manifest " <> manifest <> ": ") <>)) pure decoded
+  createDirectoryIfMissing True (takeDirectory output)
+  linkExecutable
+    linkBundleTarget
+    output
+    linkBundleCxxStdLib
+    (map (bundle </>) linkBundleObjects)
+    (map (bundle </>) linkBundleArchives)
+
+-- | Put a package before the packages it depends on.
+-- GNU ld searches each archive once, so a later archive cannot satisfy an
+-- earlier archive.
+linkOrderedPackages :: [InstalledPackage] -> [InstalledPackage]
+linkOrderedPackages packages =
+  reverse (snd (foldl visit (Set.empty, []) packages))
+  where
+    byIdentity =
+      Map.fromList
+        [ (packageIdentity package, package)
+        | package <- packages
+        ]
+    packageIdentity = packageManifestIdentity . installedManifest
+    visit (seen, ordered) package
+      | Set.member (packageIdentity package) seen = (seen, ordered)
+      | otherwise =
+          let seenSelf = Set.insert (packageIdentity package) seen
+              dependencies =
+                mapMaybe
+                  (`Map.lookup` byIdentity)
+                  (packageManifestDependencies (installedManifest package))
+              (seenDeps, orderedDeps) = foldl visit (seenSelf, ordered) dependencies
+           in (seenDeps, orderedDeps ++ [package])
+
+implicitConstraint :: Text -> PackageConstraint
+implicitConstraint name =
+  case simpleParsec (T.unpack name) of
+    Just (Dependency _ versionRange _) -> PackageConstraint name versionRange
+    Nothing -> error "invalid implicit package constraint"
+
+parsePackageConstraint :: String -> IO PackageConstraint
+parsePackageConstraint input =
+  case simpleParsec input of
+    Just dependency -> pure (dependencyConstraint dependency)
+    Nothing -> ioError (userError ("Invalid package constraint: " <> input))
+
+-- | The constraint a Cabal @build-depends@ entry states.
+dependencyConstraint :: Dependency -> PackageConstraint
+dependencyConstraint (Dependency name versionRange _) =
+  PackageConstraint (T.pack (unPackageName name)) versionRange
+
+packageCObjects :: InstalledPackage -> IO [FilePath]
+packageCObjects package = do
+  let directory = installedRoot package </> "cbits"
+  exists <- doesDirectoryExist directory
+  if not exists
+    then pure []
+    else do
+      names <- listDirectory directory
+      pure (sortOn id [directory </> name | name <- names, ".o" `isSuffixOf` name])
+
+packageArchive :: InstalledPackage -> FilePath
+packageArchive package =
+  installedRoot package
+    </> "lib"
+    </> "lib"
+      <> T.unpack (packageManifestName (installedManifest package))
+      <> ".a"
+
+requirePackageArchive :: InstalledPackage -> IO ()
+requirePackageArchive package = do
+  let archive = packageArchive package
+  exists <- doesFileExist archive
+  unless exists $
+    ioError
+      ( userError
+          ( "The library "
+              <> T.unpack (packageManifestName (installedManifest package))
+              <> " is not compiled for the target: "
+              <> archive
+          )
+      )
+
+buildInstalledModuleIndex :: [InstalledPackage] -> InstalledModuleIndex
+buildInstalledModuleIndex packages =
+  Map.fromListWith (<>) [(installedModuleName entry, [entry]) | entry <- entries]
+  where
+    entries =
+      [ InstalledModule package name
+      | package <- packages,
+        name <- packageManifestModules (installedManifest package)
+      ]
+
+discoverSources :: [FilePath] -> InstalledModuleIndex -> FilePath -> IO [SourceModule]
+discoverSources sourceDirectories moduleIndex mainPath = do
+  mainSource <- parseSource mainPath
+  unless (sourceModuleName mainSource == "Main") (ioError (userError ("The input file does not define module Main: " <> mainPath)))
+  discovered <- visit Map.empty mainSource
+  when (Map.member "Aihc.Entry" discovered) (ioError (userError "Source module conflicts with generated module Aihc.Entry"))
+  entrySource <- parseSourceText "<aihc-entry>" generatedEntryText
+  pure (Map.elems discovered <> [entrySource])
+  where
+    visit found source = do
+      let name = sourceModuleName source
+      case Map.lookup name found of
+        Just previous
+          | sourcePath previous == sourcePath source -> pure found
+          | otherwise -> ioError (userError ("More than one source file defines module " <> T.unpack name))
+        Nothing -> do
+          let found' = Map.insert name source found
+          foldM visitImport found' (sourceDependencies source)
+    visitImport found dependency
+      | not (isLocalSourceDependency dependency), Map.member name moduleIndex = pure found
+      | isNothing (sourceDependencyPackage dependency), Map.member name moduleIndex = pure found
+      | Map.member name found = pure found
+      | not (isLocalSourceDependency dependency) = pure found
+      | otherwise = do
+          path <- findSourceFile sourceDirectories name
+          parseSource path >>= visit found
+      where
+        name = sourceDependencyModule dependency
+
+generatedEntryText :: Text
+generatedEntryText =
+  T.unlines
+    [ "{-# LANGUAGE NoImplicitPrelude #-}",
+      "module Aihc.Entry where",
+      "import qualified Main",
+      "import GHC.TopHandler (runMainIO)",
+      "entry = runMainIO Main.main"
+    ]
+
+validateInstalledDependencies :: InstalledModuleIndex -> [SourceModule] -> IO ()
+validateInstalledDependencies moduleIndex sources = mapM_ validateDependency externalDependencies
+  where
+    localNames = Set.fromList (map sourceModuleName sources)
+    externalDependencies =
+      nub
+        [ dependency
+        | source <- sources,
+          dependency <- sourceDependencies source,
+          not (isLocalSourceDependency dependency)
+            || sourceDependencyModule dependency `Set.notMember` localNames
+        ]
+    validateDependency dependency =
+      case matchingModules dependency of
+        [] ->
+          ioError
+            ( userError
+                ( "Required installed module not found: "
+                    <> maybe "" ((<> ":") . T.unpack) (sourceDependencyPackage dependency)
+                    <> T.unpack (sourceDependencyModule dependency)
+                )
+            )
+        [_] -> pure ()
+        _ -> ioError (userError ("Ambiguous installed module: " <> T.unpack (sourceDependencyModule dependency)))
+    matchingModules dependency =
+      case sourceDependencyPackage dependency of
+        Nothing -> candidates
+        Just packageName' ->
+          filter
+            ((== packageName') . packageManifestName . installedManifest . installedModulePackage)
+            candidates
+      where
+        candidates = Map.findWithDefault [] (sourceDependencyModule dependency) moduleIndex
+
+materializeSourceFiles :: FilePath -> [InstalledPackage] -> [SourceModule] -> IO [HackageCabal.FileInfo]
+materializeSourceFiles buildRoot packages sources = do
+  let generatedPath = buildRoot </> "generated" </> "Aihc" </> "Entry.hs"
+      dependencyNames = map (packageManifestName . installedManifest) packages
+  createDirectoryIfMissing True (takeDirectory generatedPath)
+  TIO.writeFile generatedPath generatedEntryText
+  pure (map (sourceFileInfo generatedPath dependencyNames) sources)
+
+sourceFileInfo :: FilePath -> [Text] -> SourceModule -> HackageCabal.FileInfo
+sourceFileInfo generatedPath dependencyNames source =
+  HackageCabal.FileInfo
+    { HackageCabal.fileInfoPath = if sourcePath source == "<aihc-entry>" then generatedPath else sourcePath source,
+      HackageCabal.fileInfoExtensions = [],
+      HackageCabal.fileInfoCppOptions = [],
+      HackageCabal.fileInfoIncludeDirs = [],
+      HackageCabal.fileInfoLanguage = Nothing,
+      HackageCabal.fileInfoDependencies = dependencyNames,
+      HackageCabal.fileInfoPreprocessor = Nothing
+    }
+
+findSourceFile :: [FilePath] -> Text -> IO FilePath
+findSourceFile directories name = do
+  let relative = foldl (</>) "" (map T.unpack (T.splitOn "." name)) <> ".hs"
+      candidates = map (</> relative) directories
+  matches <- filterM doesFileExist candidates
+  case matches of
+    [path] -> pure path
+    [] -> ioError (userError ("Source module not found: " <> T.unpack name))
+    _ -> ioError (userError ("More than one source file provides module " <> T.unpack name))
+
+parseSource :: FilePath -> IO SourceModule
+parseSource path = TIO.readFile path >>= parseSourceText path
+
+parseSourceText :: FilePath -> Text -> IO SourceModule
+parseSourceText path source = do
+  let extensions = sourceExtensions source
+      modu = snd (parseModule (parserConfig path source) source)
+      name = fromMaybe "Main" (moduleName modu)
+      dependencies =
+        nub
+          ( map importDependency (Syntax.moduleImports modu)
+              <> implicitSourceDependencies "exe" extensions
+          )
+  pure
+    SourceModule
+      { sourcePath = path,
+        sourceModuleName = name,
+        sourceDependencies = dependencies
+      }
+
+importDependency :: ImportDecl -> SourceDependency
+importDependency importDecl =
+  SourceDependency
+    { sourceDependencyPackage = importDeclPackage importDecl,
+      sourceDependencyModule = importDeclModule importDecl
+    }
+
+implicitSourceDependencies :: Text -> [Extension] -> [SourceDependency]
+implicitSourceDependencies currentPackage extensions =
+  compilerDependencies
+    <> [ SourceDependency (Just "aihc-base") "Prelude"
+       | currentPackage /= "aihc-base",
+         ImplicitPrelude `elem` extensions
+       ]
+
+compilerDependencies :: [SourceDependency]
+compilerDependencies =
+  [ SourceDependency (Just "aihc-prim") "GHC.Types",
+    SourceDependency (Just "aihc-prim") "GHC.CString",
+    SourceDependency (Just "aihc-prim") "GHC.Prim.Base",
+    SourceDependency (Just "aihc-prim") "GHC.Prim.Enum",
+    SourceDependency (Just "aihc-prim") "GHC.Classes",
+    SourceDependency (Just "aihc-prim") "GHC.Prim.Num",
+    SourceDependency (Just "aihc-prim") "GHC.Prim.Real",
+    SourceDependency (Just "aihc-prim") "GHC.Prim.String"
+  ]
+
+isLocalSourceDependency :: SourceDependency -> Bool
+isLocalSourceDependency dependency =
+  isNothing (sourceDependencyPackage dependency)
+    || sourceDependencyPackage dependency == Just "this"
+
+parserConfig :: FilePath -> Text -> ParserConfig
+parserConfig path source =
+  defaultConfig
+    { parserSourceName = path,
+      parserExtensions = sourceExtensions source
+    }
+
+sourceExtensions :: Text -> [Extension]
+sourceExtensions source = effectiveExtensions language (headerExtensionSettings header)
+  where
+    header = readModuleHeaderPragmas source
+    language = fromMaybe Haskell98Edition (headerLanguageEdition header)
+
+-- | Link the objects and archives into the executable. The runtime units
+-- and the entry are among the objects: the C and Lir objects of every
+-- package are linked as they are, so nothing of the runtime is left to a
+-- member search. A program with an input from @cxx-sources@ also links
+-- the C++ standard library of the target.
+linkExecutable :: NativeTarget -> FilePath -> Bool -> [FilePath] -> [FilePath] -> IO ()
+linkExecutable Wasm32Wasip3 output cxxStdLib objects archives =
+  withTemporaryDirectory "aihc-wasm-link" $ \directory -> do
+    when cxxStdLib (either (ioError . userError) (const (pure ())) (cxxStandardLibraryArguments Wasm32Wasip3))
+    sysroot <- wasmSysroot
+    world <- wasip3WorldPath
+    let coreModule = directory </> "program.wasm"
+        typedModule = directory </> "program-typed.wasm"
+    -- The libc archive follows every other input. A linker takes only the
+    -- members that resolve a symbol it has already seen, so this pulls the
+    -- allocator, the memory routines, and the math functions the runtime
+    -- leaves undefined, and nothing else.
+    runTool
+      "wasm-ld"
+      ( ["--no-entry", "--export-memory", "--allow-undefined"]
+          <> objects
+          <> archives
+          <> [wasmSysrootLibc sysroot, "-o", coreModule]
+      )
+    -- The component type of the world the runtime implements. wit-bindgen
+    -- would put it in an object beside the bindings it generates; the
+    -- bindings are committed with the runtime instead, so the type is
+    -- embedded here from the same world.
+    runTool "wasm-tools" ["component", "embed", world, "--world", "command", coreModule, "-o", typedModule]
+    buildComponent typedModule output
+    runTool "wasm-tools" ["validate", output]
+linkExecutable target output cxxStdLib objects archives = do
+  (compiler, arguments) <- backendCompiler target
+  cxxArguments <- if cxxStdLib then either (ioError . userError) pure (cxxStandardLibraryArguments target) else pure []
+  -- The runtime takes the functions of the Floating class from libm. Recent
+  -- platforms carry it inside libc, and -lm is how the older ones that keep
+  -- it apart still resolve them.
+  runTool compiler (arguments <> objects <> archives <> ["-lm"] <> cxxArguments <> ["-o", output])
+
+-- | Encode the linked core module as a component. The component model has no
+-- way to describe a WASI preview 1 import, so a runtime unit that reaches a
+-- libc function needing one fails here rather than at run time. The notice
+-- names that cause, which the encoder reports only as an unresolved import.
+buildComponent :: FilePath -> FilePath -> IO ()
+buildComponent coreModule output = do
+  result <- readProcessWithExitCode "wasm-tools" ["component", "new", coreModule, "-o", output] ""
+  case result of
+    (ExitSuccess, _, _) -> pure ()
+    (exitCode, stdout, stderr) -> do
+      let reported = if null stderr then stdout else stderr
+          notice
+            | "wasi_snapshot_preview1" `isInfixOf` reported =
+                reported
+                  <> "\n\nAIHC notice: the program imports WASI preview 1. The runtime reaches\n\
+                     \WASI through the preview 3 bindings only, so this comes from a libc\n\
+                     \function that needs the host, such as one of the stdio, exit, or clock\n\
+                     \families. Implement it in the P3 IO backend instead.\n"
+            | otherwise = reported
+      ioError (userError ("wasm-tools failed (" <> show exitCode <> "): " <> notice))
+
+runTool :: FilePath -> [String] -> IO ()
+runTool tool arguments = do
+  result <-
+    if tool == "clang" && any ("--target=wasm32" `isPrefixOf`) arguments
+      then readWasmClangProcessWithExitCode tool arguments
+      else readProcessWithExitCode tool arguments ""
+  case result of
+    (ExitSuccess, _, _) -> pure ()
+    (exitCode, stdout, stderr) -> ioError (userError (tool <> " failed (" <> show exitCode <> "): " <> if null stderr then stdout else stderr))
+
+withTemporaryDirectory :: String -> (FilePath -> IO value) -> IO value
+withTemporaryDirectory template = bracket acquire removeDirectoryRecursive
+  where
+    acquire = do
+      temporary <- getTemporaryDirectory
+      (path, handle) <- openTempFile temporary template
+      hClose handle
+      removeFile path
+      createDirectory path
+      pure path

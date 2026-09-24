@@ -1,0 +1,68 @@
+-- |
+-- Module      : Aihc.Parser.Internal.FromTokens
+-- Description : Internal parsing functions from token streams
+-- License     : Unlicense
+--
+-- @since 0.1.0.0
+--
+-- __Warning:__ This is an internal module and is not meant to be used directly.
+-- The API may change without notice.
+--
+-- This module exposes parsing functions that work directly on token streams.
+-- These are primarily used for testing and internal purposes.
+module Aihc.Parser.Internal.FromTokens
+  ( parseExprFromTokens,
+    parsePatternFromTokens,
+    parseSignatureTypeFromTokens,
+    parseTypeFromTokens,
+    parseModuleFromTokens,
+    parseDeclFromTokens,
+    parseImportDeclFromTokens,
+    parseModuleHeaderFromTokens,
+  )
+where
+
+import Aihc.Parser.Internal.Common (TokParser, eofTok)
+import Aihc.Parser.Internal.Decl (declParser)
+import Aihc.Parser.Internal.Errors (parseErrorBundleToSpannedText)
+import Aihc.Parser.Internal.Expr (exprParser)
+import Aihc.Parser.Internal.Import (importDeclParser, moduleHeaderParser)
+import Aihc.Parser.Internal.Module (moduleParser)
+import Aihc.Parser.Internal.Pattern (patternParser)
+import Aihc.Parser.Internal.Type (typeParser, typeSignatureParser)
+import Aihc.Parser.Lex (LexToken)
+import Aihc.Parser.Syntax (Decl, Expr, ImportDecl, Module, ModuleHead, Pattern, Type)
+import Aihc.Parser.Types
+
+runParserFromTokens :: TokParser a -> FilePath -> [LexToken] -> ParseResult a
+runParserFromTokens parser sourceName toks =
+  case runTokStreamParser parser sourceName (mkTokStreamFromTokens toks) of
+    Left bundle -> ParseErr (parseErrorBundleToSpannedText sourceName (rebuildStream mkTokStreamFromTokens toks) bundle)
+    Right parsed -> ParseOk parsed
+
+parseFromTokens :: TokParser a -> FilePath -> [LexToken] -> ParseResult a
+parseFromTokens parser = runParserFromTokens (parser <* eofTok)
+
+parseExprFromTokens :: FilePath -> [LexToken] -> ParseResult Expr
+parseExprFromTokens = parseFromTokens exprParser
+
+parsePatternFromTokens :: FilePath -> [LexToken] -> ParseResult Pattern
+parsePatternFromTokens = parseFromTokens patternParser
+
+parseSignatureTypeFromTokens :: FilePath -> [LexToken] -> ParseResult Type
+parseSignatureTypeFromTokens = parseFromTokens typeSignatureParser
+
+parseTypeFromTokens :: FilePath -> [LexToken] -> ParseResult Type
+parseTypeFromTokens = parseFromTokens typeParser
+
+parseModuleFromTokens :: FilePath -> [LexToken] -> ParseResult Module
+parseModuleFromTokens = runParserFromTokens moduleParser
+
+parseDeclFromTokens :: FilePath -> [LexToken] -> ParseResult Decl
+parseDeclFromTokens = parseFromTokens declParser
+
+parseImportDeclFromTokens :: FilePath -> [LexToken] -> ParseResult ImportDecl
+parseImportDeclFromTokens = parseFromTokens importDeclParser
+
+parseModuleHeaderFromTokens :: FilePath -> [LexToken] -> ParseResult ModuleHead
+parseModuleHeaderFromTokens = parseFromTokens moduleHeaderParser

@@ -1,0 +1,60 @@
+-- | Error types for the type checker.
+module Aihc.Tc.Error
+  ( TcDiagnostic (..),
+    TcErrorKind (..),
+    TcSeverity (..),
+  )
+where
+
+import Aihc.Parser.Syntax (SourceSpan)
+import Aihc.Tc.Constraint (CtOrigin, EqProvenance)
+import Aihc.Tc.Types
+import Data.Text (Text)
+
+-- | A diagnostic produced by the type checker.
+--
+-- Source locations are display metadata, not the identity of the diagnostic.
+-- A diagnostic can be attached to an AST even when the input did not preserve
+-- source spans.
+data TcDiagnostic = TcDiagnostic
+  { diagLoc :: !(Maybe SourceSpan),
+    diagSeverity :: !TcSeverity,
+    diagKind :: !TcErrorKind
+  }
+  deriving (Show)
+
+-- | Severity of a diagnostic.
+data TcSeverity
+  = TcError
+  | TcWarning
+  deriving (Eq, Show)
+
+-- | Kinds of type checking errors.
+data TcErrorKind
+  = -- | Could not unify two types.
+    UnificationError !TcType !TcType !CtOrigin !(Maybe EqProvenance)
+  | -- | Occurs check failure (infinite type). The first type is the meta-variable.
+    OccursCheckError !TcType !TcType
+  | -- | Unbound variable.
+    UnboundVariable !String
+  | -- | Type-level expression has a different kind than expected.
+    KindMismatch !TcType !TcType
+  | -- | Unsolved wanted constraint.
+    UnsolvedWanted !Pred !CtOrigin
+  | -- | A source top-level value has an unlifted runtime representation.
+    TopLevelUnliftedBinding !Text !TcType
+  | -- | A source function argument has no fixed runtime representation.
+    RepresentationPolymorphicFunctionArgument !Text !TcType
+  | -- | A functional dependency names something that is not a parameter of
+    -- the class. The class name comes first.
+    FunDepUnknownTyVar !Text !Text
+  | -- | An instance head leaves the parameters that a functional dependency
+    -- determines undetermined. The lists name the class parameters on each
+    -- side of the dependency.
+    InstanceFunDepCoverage !Pred ![Text] ![Text]
+  | -- | Two instances of a class disagree about the parameters that a
+    -- functional dependency determines.
+    InstanceFunDepConflict !Pred !Pred ![Text] ![Text]
+  | -- | Other error with a message.
+    OtherError !String
+  deriving (Show)

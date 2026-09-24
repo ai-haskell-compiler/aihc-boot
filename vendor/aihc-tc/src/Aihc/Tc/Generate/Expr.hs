@@ -1,0 +1,1647 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
+
+-- | Constraint generation for expressions.
+--
+-- This module implements bidirectional type inference/checking for the
+-- surface expression language. It walks the surface AST and returns the same
+-- expression with pending type-checker annotations attached at the exact sites
+-- that produced them.
+module Aihc.Tc.Generate.Expr
+  ( inferExpr,
+    inferExprAt,
+    checkExpr,
+    checkRhs,
+  )
+where
+
+import Aihc.Parser.Syntax
+  ( Annotation,
+    ArithSeq (..),
+    CaseAlt (..),
+    CompStmt (..),
+    DoFlavor (..),
+    DoStmt (..),
+    Expr (..),
+    FloatType (..),
+    GuardedRhs (..),
+    LambdaCaseAlt (..),
+    Name (..),
+    NumericType (..),
+    Pattern (..),
+    Pragma,
+    RecordField (..),
+    Rhs (..),
+    SourceSpan,
+    TupleFlavor (..),
+    Type,
+    UnqualifiedName (..),
+    fromAnnotation,
+    mkAnnotation,
+  )
+import Aihc.Resolve (Identifier (..), ResolutionAnnotation (..), ResolutionNamespace (..), ResolvedName, displayIdentifier)
+import Aihc.Tc.Annotations (PendingTcAnnotation (..), annotateExprCast, annotateFunCast, annotateRhsCast, pendingAnnotation, pendingTypeLambdaAnnotation)
+import Aihc.Tc.Constraint
+import Aihc.Tc.Env (PatSynDirection (..), PatSynInfo (..), RecordHead (..), TyConInfo (..))
+import Aihc.Tc.Error (TcErrorKind (..))
+import Aihc.Tc.Evidence (EvTerm (..), EvVar)
+import Aihc.Tc.Generate.Bind (checkGuardedRhss, inferGuardedRhss, inferLocalDecls)
+import Aihc.Tc.Generate.Pattern
+import Aihc.Tc.Generate.PatternBranch (solvePatternBranch)
+import Aihc.Tc.Generate.Record (lookupRecordHead, orderRecordFields, recordFieldLabel, recordHeadNameSyntax, recordUpdateHeads, synthesizedRecordLocal)
+import Aihc.Tc.Instantiate (Instantiation (..), instantiateWithArgs)
+import Aihc.Tc.Kind (checkRuntimeType, checkSurfaceType, explicitForallNames, scopedSigTyVars, tcTypeKind, unboxedSumType)
+import Aihc.Tc.Monad
+import Aihc.Tc.QuickLook (quickLookUnify)
+import Aihc.Tc.Solve.Dict (DictResult (..), solveDictWithGivens)
+import Aihc.Tc.Solve.Equality (EqResult (..), solveEquality)
+import Aihc.Tc.Types
+import Aihc.Tc.Unify (unifyDeferring)
+import Aihc.Tc.Zonk (zonkType)
+import Control.Applicative ((<|>))
+import Control.Monad (when)
+import Data.Bifunctor qualified as Bifunctor
+import Data.Either (fromRight)
+import Data.IntSet (IntSet)
+import Data.IntSet qualified as IntSet
+import Data.List (partition)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Data.Text (Text)
+import Data.Text qualified as T
+
+-- | Infer the type of an expression.
+--
+-- Returns the pending-annotated expression, the inferred type, and wanted
+-- constraints.
+inferExpr :: Expr -> TcM (Expr, TcType, [Ct])
+inferExpr = inferExprAt Nothing
+
+inferExprAt :: Maybe SourceSpan -> Expr -> TcM (Expr, TcType, [Ct])
+inferExprAt ambient expr = case expr of
+  EAnn integerAnn (EAnn ann inner)
+    | Just integerResolution <- fromAnnotation @ResolutionAnnotation integerAnn,
+      resolutionNamespace integerResolution == ResolutionNamespaceType,
+      Just resolution <- fromAnnotation @ResolutionAnnotation ann,
+      isFromIntegerResolution resolution,
+      EInt _ TInteger _ <- inner -> do
+        (literal, ty, cts) <- inferOverloadedIntegerLiteral ambient (Just integerResolution) ann resolution inner
+        pure (EAnn integerAnn literal, ty, cts)
+  EAnn ann inner
+    | Just resolution <- fromAnnotation @ResolutionAnnotation ann,
+      isFromIntegerResolution resolution,
+      EInt _ TInteger _ <- inner ->
+        inferOverloadedIntegerLiteral ambient Nothing ann resolution inner
+  EAnn ann inner
+    | Just resolution <- fromAnnotation @ResolutionAnnotation ann,
+      isSyntaxTermResolution "fromRational" resolution,
+      EFloat _ TFractional _ <- inner ->
+        inferOverloadedLiteral ambient "fromRational" [] ann resolution inner
+  EAnn ann inner
+    | Just resolution <- fromAnnotation @ResolutionAnnotation ann,
+      isSyntaxTermResolution "fromString" resolution,
+      EString _ _ <- inner ->
+        inferOverloadedLiteral ambient "fromString" [] ann resolution inner
+  EAnn ann inner
+    | Just resolution <- fromAnnotation @ResolutionAnnotation ann,
+      resolutionNamespace resolution == ResolutionNamespaceType,
+      isPrimitiveLiteral inner ->
+        inferPrimitiveLiteral ann resolution inner
+  EAnn ann (EIf cond thenE elseE)
+    | Just resolution <- fromAnnotation @ResolutionAnnotation ann,
+      isIfThenElseResolution resolution ->
+        inferRebindableIf (resolutionSpan resolution <|> ambient) ann resolution cond thenE elseE
+  EAnn ann (ENegate inner)
+    | Just resolution <- fromAnnotation @ResolutionAnnotation ann,
+      isSyntaxTermResolution "negate" resolution ->
+        inferNegate (resolutionSpan resolution <|> ambient) ann resolution inner
+  EVar name ->
+    inferVar (exprSpan expr <|> ambient) name
+  EImplicitParam name ->
+    inferImplicitParam (exprSpan expr <|> ambient) name
+  EInt {} ->
+    abortTc "integer literal is missing its resolver type annotation"
+  EFloat {} ->
+    abortTc "fractional literal is missing its resolver type annotation"
+  EChar _ _ ->
+    literalResult expr charType
+  ECharHash {} ->
+    abortTc "primitive character literal is missing its resolver type annotation"
+  EString _ _ ->
+    literalResult expr stringTyCon
+  EStringHash {} ->
+    abortTc "primitive string literal is missing its resolver type annotation"
+  ELambdaPats pats body ->
+    inferLambda (exprSpan expr <|> ambient) pats body
+  ELambdaCase alts ->
+    inferLambdaCase (exprSpan expr <|> ambient) alts
+  ELambdaCases alts ->
+    inferLambdaCases (exprSpan expr <|> ambient) alts
+  EApp {} ->
+    inferApplicationSpine ambient expr
+  ETypeApp {} ->
+    inferApplicationSpine ambient expr
+  EInfix {} ->
+    inferApplicationSpine ambient expr
+  ESectionL inner op ->
+    inferSectionL (exprSpan expr <|> ambient) inner op
+  ESectionR op inner ->
+    inferSectionR (exprSpan expr <|> ambient) op inner
+  EIf cond thenE elseE ->
+    inferIf (exprSpan expr <|> ambient) cond thenE elseE
+  EMultiWayIf alternatives ->
+    inferMultiWayIf (exprSpan expr <|> ambient) alternatives
+  ECase scrutinee alts ->
+    inferCase (exprSpan expr <|> ambient) scrutinee alts
+  ERecordCon name fields wildcard ->
+    inferRecordCon (sourceSpanFromAnns (nameAnns name) <|> ambient) name fields wildcard
+  ERecordUpd record fields ->
+    inferRecordUpdate (exprSpan expr <|> ambient) record fields
+  ELetDecls decls body -> do
+    (decls', body', bodyTy, cts) <- inferLocalDecls inferExpr decls (inferExpr body)
+    pure (ELetDecls decls' body', bodyTy, cts)
+  EParen inner -> do
+    (inner', ty, cts) <- inferExprAt (exprSpan expr <|> ambient) inner
+    pure (EParen inner', ty, cts)
+  -- An expression pragma such as SCC does not change the type. The
+  -- compiler ignores pragmas and keeps the wrapped expression.
+  EPragma pragma inner -> do
+    (inner', ty, cts) <- inferExprAt ambient inner
+    pure (EPragma pragma inner', ty, cts)
+  ETypeSig inner tyAnn -> do
+    inferTypeSig (exprSpan expr <|> ambient) inner tyAnn
+  ENegate inner -> do
+    (inner', innerTy, cs) <- inferExpr inner
+    pure (ENegate inner', innerTy, cs)
+  EAnn ann inner -> do
+    (inner', ty, cts) <- inferExprAt (fromAnnotation @SourceSpan ann <|> ambient) inner
+    pure (EAnn ann inner', ty, cts)
+  ETuple flavor elems ->
+    inferTuple (exprSpan expr <|> ambient) flavor elems
+  EUnboxedSum alternative arity inner -> do
+    (inner', innerType, constraints) <- inferExprAt ambient inner
+    types <- mapM (\index -> if index == alternative then pure innerType else freshMetaTv) [0 .. arity - 1]
+    sumType <- unboxedSumType types
+    let pending = pendingAnnotation sumType types [] []
+    pure (annotatePendingExprAt ambient pending (EUnboxedSum alternative arity inner'), sumType, constraints)
+  EList elems ->
+    inferList (exprSpan expr <|> ambient) elems
+  EListComp body quals ->
+    inferListComp (exprSpan expr <|> ambient) body quals
+  EArithSeq arithSeq ->
+    inferArithSeq (exprSpan expr <|> ambient) arithSeq
+  EDo stmts flavor ->
+    inferDo (exprSpan expr <|> ambient) flavor stmts
+  -- A Template Haskell quote compiles to a runtime error, so it has any
+  -- type the context wants.
+  _ | isTemplateHaskellQuote expr -> literalResult expr freshMetaTv
+  other -> do
+    emitError (exprSpan expr <|> ambient) (OtherError ("unsupported expression form in TC MVP: " ++ take 50 (show other)))
+    ty <- freshMetaTv
+    pure (expr, ty, [])
+
+-- | A Template Haskell quote such as @[| e |]@, @[t| ty |]@, or @'name@.
+isTemplateHaskellQuote :: Expr -> Bool
+isTemplateHaskellQuote expr =
+  case expr of
+    ETHExpQuote {} -> True
+    ETHTypedQuote {} -> True
+    ETHDeclQuote {} -> True
+    ETHTypeQuote {} -> True
+    ETHPatQuote {} -> True
+    ETHNameQuote {} -> True
+    ETHTypeNameQuote {} -> True
+    _ -> False
+
+literalResult :: Expr -> TcM TcType -> TcM (Expr, TcType, [Ct])
+literalResult expr typeAction = do
+  ty <- typeAction
+  pure (annotatePendingExpr (pendingAnnotation ty [] [] []) expr, ty, [])
+
+-- | Infer the type of a variable reference.
+inferVar :: Maybe SourceSpan -> Name -> TcM (Expr, TcType, [Ct])
+inferVar ambient nameSyntax = do
+  (mPending, ty, cts) <- inferNameOccurrence ambient nameSyntax
+  let expr =
+        case mPending of
+          Just pending -> annotatePendingExprAt (sourceSpanFromAnns (nameAnns nameSyntax)) pending (EVar nameSyntax)
+          Nothing -> EVar nameSyntax
+  pure (expr, ty, cts)
+
+-- | Infer the type of an implicit-parameter use such as @?x@.
+--
+-- The use has a fresh type and wants @?x@ at that type. The solver connects
+-- the wanted constraint to a binding, and the evidence is the bound value.
+inferImplicitParam :: Maybe SourceSpan -> Text -> TcM (Expr, TcType, [Ct])
+inferImplicitParam sp name = do
+  ty <- freshMetaTv
+  ev <- freshEvVar
+  let ct = mkWantedCt (IParamPred name ty) ev (ImplicitParamOrigin name) sp
+      expr = annotatePendingExprAt sp (pendingAnnotation ty [] [ev] []) (EImplicitParam name)
+  pure (expr, ty, [ct])
+
+inferOperator :: Maybe SourceSpan -> Name -> TcM (Name, TcType, [Ct])
+inferOperator ambient nameSyntax = do
+  (mPending, ty, cts) <- inferNameOccurrence ambient nameSyntax
+  let name' =
+        case mPending of
+          Just pending -> annotatePendingName pending nameSyntax
+          Nothing -> nameSyntax
+  pure (name', ty, cts)
+
+inferNameOccurrence :: Maybe SourceSpan -> Name -> TcM (Maybe PendingTcAnnotation, TcType, [Ct])
+inferNameOccurrence ambient nameSyntax = do
+  let sp = sourceSpanFromAnns (nameAnns nameSyntax) <|> ambient
+      name = nameToText nameSyntax
+  target <- resolvedTermTarget nameSyntax
+  mBinder <- lookupResolvedTerm name target
+  rejectUnidirectionalPatSyn sp name target
+  case mBinder of
+    Just (TcIdBinder scheme _) -> do
+      inst <- instantiateWithArgs scheme
+      cts <- mapM (predToCt sp name) (instPreds inst)
+      let typeArgs = instTypeArgs inst
+          inferredCount = length typeArgs - length (instSpecifiedArgs inst)
+          evidenceVars = map ctEvVar cts
+          pending = occurrenceAnnotation (instType inst) typeArgs inferredCount evidenceVars
+      pure (pending, instType inst, cts)
+    Just (TcMonoIdBinder ty) -> do
+      (instantiatedTy, typeArgs, predicates) <- instantiateSigmaType ty
+      cts <- mapM (predToCt sp name) predicates
+      let evidenceVars = map ctEvVar cts
+      pure (occurrenceAnnotation instantiatedTy typeArgs 0 evidenceVars, instantiatedTy, cts)
+    Nothing ->
+      abortTc ("resolved term missing from type environment: " <> show name <> " resolved as " <> show target)
+
+-- | A unidirectional pattern synonym has no builder. An expression cannot
+-- use it.
+rejectUnidirectionalPatSyn :: Maybe SourceSpan -> Text -> ResolvedName -> TcM ()
+rejectUnidirectionalPatSyn sp name target = do
+  mPatSyn <- lookupPatSynTarget target
+  case mPatSyn of
+    Just info
+      | psiDirection info == PatSynUnidirectionalInfo ->
+          emitError sp (OtherError ("unidirectional pattern synonym " <> T.unpack name <> " cannot be used as an expression"))
+    _ -> pure ()
+
+occurrenceAnnotation :: TcType -> [TcType] -> Int -> [EvVar] -> Maybe PendingTcAnnotation
+occurrenceAnnotation ty typeArgs inferredCount evidenceVars
+  | null typeArgs && null evidenceVars = Nothing
+  | otherwise = Just (pendingAnnotation ty typeArgs evidenceVars []) {pendingTcAnnInferredTypeArgs = inferredCount}
+
+-- | An expression signature stands in a result position, not at a binder,
+-- so its type needs no fixed runtime representation: any @TYPE r@ will do.
+-- Checking against @typeKind@ would reject @(proxy# :: Proxy# a)@ and
+-- @(3# :: Int#)@, which are perfectly good annotated expressions.
+-- 'checkRuntimeType' accepts every @TYPE r@ and defaults an unconstrained
+-- representation to lifted, while still rejecting an ill-kinded annotation
+-- such as @(x :: Maybe)@.
+inferTypeSig :: Maybe SourceSpan -> Expr -> Type -> TcM (Expr, TcType, [Ct])
+inferTypeSig sp inner tyAnn = do
+  scoped <- getScopedTyVars
+  sigTy <- checkRuntimeType scoped tyAnn
+  if isPolyType sigTy
+    then inferPolyTypeSig sp inner tyAnn sigTy
+    else inferMonoTypeSig sp inner tyAnn sigTy
+
+-- | An expression signature that is a polytype cannot be equated with the
+-- inferred type of the expression: the expression is checked against the
+-- skolemized signature, with its context as givens and its explicit
+-- @forall@ variables in scope, exactly as a higher-rank argument is. The
+-- signature is then instantiated again, because the expression itself
+-- stands where a monotype is expected.
+inferPolyTypeSig :: Maybe SourceSpan -> Expr -> Type -> TcType -> TcM (Expr, TcType, [Ct])
+inferPolyTypeSig sp inner tyAnn sigTy = do
+  boundary <- getUniqueBoundary
+  skolemized@(skolems, _, sigBody) <- skolemizeSigmaType sigTy
+  let scope = scopedSigTyVars (explicitForallNames tyAnn) skolems
+  (inner', innerTy, innerCts) <-
+    withScopedTyVars scope $
+      if checksExpectedResult inner
+        then checkExpr sigBody inner
+        else inferExprAt sp inner
+  (annotatedInner, residualCts) <-
+    finishHigherRankArgument sp boundary sigTy skolemized inner' innerTy innerCts
+  (instantiatedTy, typeArgs, predicates) <- instantiateSigmaType sigTy
+  instantiationCts <- mapM (predToCt sp "<expression>") predicates
+  let pending = pendingAnnotation instantiatedTy typeArgs (map ctEvVar instantiationCts) []
+  pure
+    ( annotatePendingExprAt sp pending (ETypeSig annotatedInner tyAnn),
+      instantiatedTy,
+      residualCts <> instantiationCts
+    )
+
+inferMonoTypeSig :: Maybe SourceSpan -> Expr -> Type -> TcType -> TcM (Expr, TcType, [Ct])
+inferMonoTypeSig sp inner tyAnn sigTy = do
+  (inner', innerTy, cts) <- inferExprAt sp inner
+  ev <- freshEvVar
+  let sigCt =
+        mkWantedEqCt
+          TypeTrace
+            { typeTraceType = innerTy,
+              typeTraceRole = ActualType,
+              typeTraceOrigin = ExpressionTypeOrigin sp
+            }
+          TypeTrace
+            { typeTraceType = sigTy,
+              typeTraceRole = ExpectedType,
+              typeTraceOrigin = TypeSignatureOrigin "<expression>" sp
+            }
+          ev
+          (SigOrigin sp)
+          sp
+  pure (ETypeSig inner' tyAnn, sigTy, cts <> [sigCt])
+
+-- | An overloaded integer literal is @fromInteger (n :: Integer)@.
+--
+-- The resolver gives the Integer type when the built-in scope has it.
+-- The argument type of the method then equals Integer.
+inferOverloadedIntegerLiteral :: Maybe SourceSpan -> Maybe ResolutionAnnotation -> Annotation -> ResolutionAnnotation -> Expr -> TcM (Expr, TcType, [Ct])
+inferOverloadedIntegerLiteral ambient integerResolution =
+  inferOverloadedLiteral ambient "fromInteger" (maybe [] pure integerResolution)
+
+-- | Infer an overloaded literal that a class method converts.
+--
+-- @literalResolutions@ holds the resolution of the type of the argument of
+-- the method, when the resolver gives it. The argument type of the method
+-- must then equal that type.
+inferOverloadedLiteral :: Maybe SourceSpan -> Text -> [ResolutionAnnotation] -> Annotation -> ResolutionAnnotation -> Expr -> TcM (Expr, TcType, [Ct])
+inferOverloadedLiteral ambient methodName literalResolutions resolutionAnn resolution literalExpr = do
+  let sp = resolutionSpan resolution <|> ambient
+  (methodTy, typeArgs, methodCts) <- inferResolvedSyntaxMethod sp methodName resolution
+  resultTy <- freshMetaTv
+  ev <- freshEvVar
+  literalArgTy <-
+    case methodTy of
+      TcFunTy argumentTy _ -> pure argumentTy
+      _ -> abortTc (T.unpack methodName <> " does not have a function type")
+  literalCts <- concat <$> mapM (\literalResolution -> resolvedLiteralCts sp literalResolution literalArgTy) literalResolutions
+  let expectedMethodTy = TcFunTy literalArgTy resultTy
+      methodEq =
+        mkWantedEqCt
+          TypeTrace
+            { typeTraceType = methodTy,
+              typeTraceRole = ActualType,
+              typeTraceOrigin = ConstraintTypeOrigin (OccurrenceOf methodName)
+            }
+          TypeTrace
+            { typeTraceType = expectedMethodTy,
+              typeTraceRole = ExpectedType,
+              typeTraceOrigin = ConstraintTypeOrigin (LitOrigin sp)
+            }
+          ev
+          (LitOrigin sp)
+          sp
+      pending =
+        pendingAnnotation
+          resultTy
+          typeArgs
+          (map ctEvVar methodCts)
+          []
+  pure (annotatePendingExprAt sp pending (EAnn resolutionAnn literalExpr), resultTy, methodCts <> [methodEq] <> literalCts)
+
+inferPrimitiveLiteral :: Annotation -> ResolutionAnnotation -> Expr -> TcM (Expr, TcType, [Ct])
+inferPrimitiveLiteral resolutionAnn resolution literalExpr = do
+  maybeInfo <- lookupResolvedTypeSyntax resolution
+  case maybeInfo of
+    Just info ->
+      literalResult (EAnn resolutionAnn literalExpr) (pure (TcTyCon (tciTyCon info) []))
+    Nothing ->
+      abortTc ("resolved primitive literal type missing from type environment: " <> show (resolutionTarget resolution))
+
+isPrimitiveLiteral :: Expr -> Bool
+isPrimitiveLiteral expr =
+  case expr of
+    EInt _ numericType _ -> numericType /= TInteger
+    EFloat _ floatType _ -> floatType /= TFractional
+    ECharHash {} -> True
+    EStringHash {} -> True
+    _ -> False
+
+-- | Whether a resolver annotation names the given syntax term.
+isSyntaxTermResolution :: Text -> ResolutionAnnotation -> Bool
+isSyntaxTermResolution name resolution =
+  resolutionNamespace resolution == ResolutionNamespaceTerm
+    && resolutionIdentifier resolution == IdentifierNamed name
+
+isFromIntegerResolution :: ResolutionAnnotation -> Bool
+isFromIntegerResolution = isSyntaxTermResolution "fromInteger"
+
+-- | Whether a resolver annotation names the method that sequences a do statement.
+isDoMethodResolution :: ResolutionAnnotation -> Bool
+isDoMethodResolution resolution =
+  isSyntaxTermResolution ">>=" resolution || isSyntaxTermResolution ">>" resolution
+
+isIfThenElseResolution :: ResolutionAnnotation -> Bool
+isIfThenElseResolution = isSyntaxTermResolution "ifThenElse"
+
+isArithSeqResolution :: ResolutionAnnotation -> Bool
+isArithSeqResolution resolution =
+  resolutionNamespace resolution == ResolutionNamespaceTerm
+    && resolutionIdentifier resolution
+      `elem` map IdentifierNamed ["enumFrom", "enumFromThen", "enumFromTo", "enumFromThenTo"]
+
+annotatePendingExpr :: PendingTcAnnotation -> Expr -> Expr
+annotatePendingExpr ann =
+  EAnn (mkAnnotation ann)
+
+annotatePendingExprAt :: Maybe SourceSpan -> PendingTcAnnotation -> Expr -> Expr
+annotatePendingExprAt Nothing ann =
+  annotatePendingExpr ann
+annotatePendingExprAt (Just sp) ann =
+  EAnn (mkAnnotation sp) . annotatePendingExpr ann
+
+annotatePendingName :: PendingTcAnnotation -> Name -> Name
+annotatePendingName ann name =
+  name {nameAnns = nameAnns name <> [mkAnnotation ann]}
+
+-- | Convert a predicate to a wanted constraint.
+predToCt :: Maybe SourceSpan -> Text -> Pred -> TcM Ct
+predToCt sp name p = do
+  ev <- freshEvVar
+  pure $
+    mkWantedCt p ev (OccurrenceOf name) sp
+
+-- | Infer the type of a lambda expression.
+inferLambda :: Maybe SourceSpan -> [Pattern] -> Expr -> TcM (Expr, TcType, [Ct])
+inferLambda sp pats body = do
+  argTys <- mapM (const freshMetaTv) pats
+  patCheck <- checkFunctionPatterns sp (zip pats argTys)
+  (body', bodyTy, bodyCts) <- withPatternBindings (pcBindings patCheck) (inferExpr body)
+  remainingCts <- solvePatternBranch sp patCheck bodyTy bodyCts
+  let funTy = foldr TcFunTy bodyTy argTys
+      pats' = zipWith (annotateLambdaPattern (pcBindings patCheck)) argTys (pcPatterns patCheck)
+      lambda = annotatePendingExprAt sp (pendingAnnotation funTy [] [] []) (ELambdaPats pats' body')
+  pure (lambda, funTy, remainingCts)
+
+annotateLambdaPattern :: [(UnqualifiedName, TcType)] -> TcType -> Pattern -> Pattern
+annotateLambdaPattern bindings argTy pat =
+  let annotated = annotatePatternBindings bindings pat
+   in if lambdaPatternCarriesBinderType annotated
+        then annotated
+        else PAnn (mkAnnotation (pendingAnnotation argTy [] [] [])) annotated
+
+lambdaPatternCarriesBinderType :: Pattern -> Bool
+lambdaPatternCarriesBinderType (PAnn _ inner) = lambdaPatternCarriesBinderType inner
+lambdaPatternCarriesBinderType PVar {} = True
+lambdaPatternCarriesBinderType (PParen inner) = lambdaPatternCarriesBinderType inner
+lambdaPatternCarriesBinderType PAs {} = True
+lambdaPatternCarriesBinderType (PStrict inner) = lambdaPatternCarriesBinderType inner
+lambdaPatternCarriesBinderType (PIrrefutable inner) = lambdaPatternCarriesBinderType inner
+lambdaPatternCarriesBinderType (PTypeSig inner _) = lambdaPatternCarriesBinderType inner
+lambdaPatternCarriesBinderType _ = False
+
+inferLambdaCase :: Maybe SourceSpan -> [CaseAlt Expr] -> TcM (Expr, TcType, [Ct])
+inferLambdaCase sp alts = do
+  argTy <- freshMetaTv
+  resTy <- freshMetaTv
+  (alts', cts) <- inferCaseAlts sp argTy resTy alts
+  pure (ELambdaCase alts', TcFunTy argTy resTy, cts)
+
+-- | Pass the expected result into case branches before equality refinement.
+checkExpr :: TcType -> Expr -> TcM (Expr, TcType, [Ct])
+checkExpr expected expression = case expression of
+  EAnn annotation inner | checksExpectedResult inner -> do
+    (inner', ty, constraints) <- checkExpr expected inner
+    pure (EAnn annotation inner', ty, constraints)
+  EParen inner -> do
+    (inner', ty, constraints) <- checkExpr expected inner
+    pure (EParen inner', ty, constraints)
+  -- A pragma does not change the type, so the expected type goes through it.
+  EPragma pragma inner -> do
+    (inner', ty, constraints) <- checkExpr expected inner
+    pure (EPragma pragma inner', ty, constraints)
+  ELambdaPats patterns body -> checkLambda expected (exprSpan expression) patterns body
+  ECase scrutinee alternatives -> do
+    (scrutinee', scrutineeType, constraints) <- inferExpr scrutinee
+    prepareScrutinee constraints
+    (alternatives', branchConstraints) <- inferCaseAlts (exprSpan expression) scrutineeType expected alternatives
+    let pending = pendingAnnotation expected [] [] []
+    pure (annotatePendingExprAt (exprSpan expression) pending (ECase scrutinee' alternatives'), expected, constraints <> branchConstraints)
+  EDo statements DoPlain -> do
+    (statements', ty, constraints) <- inferDoStmtsWith (Just expected) (exprSpan expression) statements
+    let pending = pendingAnnotation ty [] [] []
+    pure (annotatePendingExprAt (exprSpan expression) pending (EDo statements' DoPlain), ty, constraints)
+  ELetDecls declarations body -> do
+    (declarations', body', ty, constraints) <- inferLocalDecls inferExpr declarations (checkExpr expected body)
+    pure (ELetDecls declarations' body', ty, constraints)
+  _ -> inferExpr expression
+
+-- | Give lambda parameters their expected types before the body check.
+checkLambda :: TcType -> Maybe SourceSpan -> [Pattern] -> Expr -> TcM (Expr, TcType, [Ct])
+checkLambda expected sp patterns body = do
+  expectedParts <- splitExpected expected patterns
+  case expectedParts of
+    Nothing -> inferLambda sp patterns body
+    Just (argumentTypes, resultType) -> do
+      patternCheck <- checkFunctionPatterns sp (zip patterns argumentTypes)
+      (body', bodyType, bodyConstraints) <-
+        withPatternBindings (pcBindings patternCheck) (checkExpr resultType body)
+      constraints <- solvePatternBranch sp patternCheck bodyType bodyConstraints
+      let functionType = foldr TcFunTy bodyType argumentTypes
+          patterns' = zipWith (annotateLambdaPattern (pcBindings patternCheck)) argumentTypes (pcPatterns patternCheck)
+          lambda = annotatePendingExprAt sp (pendingAnnotation functionType [] [] []) (ELambdaPats patterns' body')
+      pure (lambda, functionType, constraints)
+  where
+    splitExpected ty [] = pure (Just ([], ty))
+    splitExpected ty (_ : rest) = do
+      zonked <- zonkType ty
+      case zonked of
+        TcFunTy argument result -> do
+          remaining <- splitExpected result rest
+          pure (fmap (Bifunctor.first (argument :)) remaining)
+        _ -> pure Nothing
+
+checkRhs :: TcType -> Rhs Expr -> TcM (Rhs Expr, TcType, [Ct])
+checkRhs expected rhs = case rhs of
+  UnguardedRhs annotations expression Nothing -> do
+    (expression', ty, constraints) <- checkExpr expected expression
+    pure (UnguardedRhs annotations expression' Nothing, ty, constraints)
+  UnguardedRhs annotations expression (Just declarations) -> do
+    (declarations', expression', ty, constraints) <- inferLocalDecls inferExpr declarations (checkExpr expected expression)
+    pure (UnguardedRhs annotations expression' (Just declarations'), ty, constraints)
+  -- A guarded body gets the expected type, as an unguarded body does.
+  GuardedRhss annotations guardedRhss Nothing -> do
+    (guardedRhss', ty, constraints) <- checkGuardedRhss inferExpr (checkExpr expected) expected guardedRhss
+    pure (GuardedRhss annotations guardedRhss' Nothing, ty, constraints)
+  GuardedRhss annotations guardedRhss (Just declarations) -> do
+    (declarations', guardedRhss', ty, constraints) <-
+      inferLocalDecls inferExpr declarations (checkGuardedRhss inferExpr (checkExpr expected) expected guardedRhss)
+    pure (GuardedRhss annotations guardedRhss' (Just declarations'), ty, constraints)
+
+-- | Whether 'checkExpr' gives the expected type to this expression.
+-- Keep this list of constructors the same as the list in 'checkExpr'.
+checksExpectedResult :: Expr -> Bool
+checksExpectedResult expression = case expression of
+  EAnn _ inner -> checksExpectedResult inner
+  EParen inner -> checksExpectedResult inner
+  EPragma _ inner -> checksExpectedResult inner
+  ECase {} -> True
+  ELetDecls {} -> True
+  EDo _ DoPlain -> True
+  ELambdaPats {} -> True
+  _ -> False
+
+-- | Connect application results before constructor patterns refine their indices.
+prepareScrutinee :: [Ct] -> TcM ()
+prepareScrutinee = mapM_ prepare
+  where
+    prepare constraint = case ctPred constraint of
+      EqPred {} -> do
+        _ <- solveEquality constraint
+        pure ()
+      _ -> pure ()
+
+inferCase :: Maybe SourceSpan -> Expr -> [CaseAlt Expr] -> TcM (Expr, TcType, [Ct])
+inferCase sp scrutinee alts = do
+  (scrutinee', scrutTy, scrutCts) <- inferExpr scrutinee
+  prepareScrutinee scrutCts
+  resTy <- freshMetaTv
+  (alts', altCts) <- inferCaseAlts sp scrutTy resTy alts
+  let pending = pendingAnnotation resTy [] [] []
+  pure (annotatePendingExprAt sp pending (ECase scrutinee' alts'), resTy, scrutCts ++ altCts)
+
+-- | Record construction is constructor application with the arguments in
+-- field declaration order.
+inferRecordCon :: Maybe SourceSpan -> Name -> [RecordField Expr] -> Bool -> TcM (Expr, TcType, [Ct])
+inferRecordCon sp name fields wildcard = do
+  -- The resolver expands a record wildcard into puns, so one that survives
+  -- means the constructor's fields were not in scope.
+  when wildcard $
+    abortTc ("the fields of the record wildcard construction of " <> T.unpack (nameText name) <> " are not in scope at " <> show sp)
+  -- A record pattern synonym builds through its builder, which is bound
+  -- under the synonym's own name, so both heads expand the same way.
+  head' <- lookupRecordHead name
+  args <- orderRecordFields sp head' fields missingField
+  inferExprAt sp (foldl EApp (EVar name) args)
+  where
+    missingField label =
+      abortTc ("record construction of " <> T.unpack (nameText name) <> " does not give the field " <> show (fromMaybe "<positional>" label) <> " at " <> show sp)
+
+-- | A record update is a case expression. Each alternative matches one
+-- head that has every updated field and rebuilds it with the new field
+-- values. A record pattern synonym is one such head, and it has exactly
+-- one alternative.
+inferRecordUpdate :: Maybe SourceSpan -> Expr -> [RecordField Expr] -> TcM (Expr, TcType, [Ct])
+inferRecordUpdate sp record fields = do
+  (record', recordTy, recordCts) <- inferExprAt sp record
+  zonked <- zonkType recordTy
+  heads <- recordUpdateHeads sp (Just zonked) fields
+  alts <- mapM updateAlternative heads
+  resTy <- freshMetaTv
+  (alts', altCts) <- inferCaseAlts sp recordTy resTy alts
+  let pending = pendingAnnotation resTy [] [] []
+  pure (annotatePendingExprAt sp pending (ECase record' alts'), resTy, recordCts ++ altCts)
+  where
+    updateAlternative :: RecordHead -> TcM (CaseAlt Expr)
+    updateAlternative head' = do
+      let labels = rhFields head'
+      binders <- mapM (\index -> synthesizedRecordLocal ("$field" <> T.pack (show index))) [1 .. length labels]
+      let conSyntax = recordHeadNameSyntax head'
+          argument label binder =
+            case [recordFieldValue occurrence | occurrence <- fields, Just (recordFieldLabel occurrence) == label] of
+              value : _ -> value
+              [] -> EVar (Name Nothing (unqualifiedNameType binder) (unqualifiedNameText binder) (unqualifiedNameAnns binder))
+          body = foldl EApp (EVar conSyntax) (zipWith argument labels binders)
+      pure (CaseAlt [] (PCon conSyntax [] (map PVar binders)) (UnguardedRhs [] body Nothing))
+
+inferLambdaCases :: Maybe SourceSpan -> [LambdaCaseAlt] -> TcM (Expr, TcType, [Ct])
+inferLambdaCases sp alts = do
+  let arity = maximum (0 : map (length . lambdaCaseAltPats) alts)
+  argTys <- mapM (const freshMetaTv) [1 .. arity]
+  resTy <- freshMetaTv
+  results <- mapM (inferLambdaCaseAlt sp argTys resTy) alts
+  let alts' = map fst results
+      cts = concatMap snd results
+  pure (ELambdaCases alts', foldr TcFunTy resTy argTys, cts)
+
+inferCaseAlts :: Maybe SourceSpan -> TcType -> TcType -> [CaseAlt Expr] -> TcM ([CaseAlt Expr], [Ct])
+inferCaseAlts _sp _scrutTy _resTy [] = pure ([], [])
+inferCaseAlts sp scrutTy resTy alternatives = do
+  results <- mapM inferAlt alternatives
+  pure (map fst results, concatMap snd results)
+  where
+    inferAlt (CaseAlt altAnns pat rhs) = do
+      let altSp = sourceSpanFromAnns altAnns
+          branchSp = (<|>) altSp sp
+      patCheck <- checkPattern branchSp pat scrutTy
+      (rhs', rhsTy, rhsCts) <- withGivenPredicates (map ctPred (pcGivenCts patCheck)) (withPatternBindings (pcBindings patCheck) (checkRhs resTy rhs))
+      resultEv <- freshEvVar
+      let rhsSp = rhsExprSpan rhs <|> branchSp
+          resultCt =
+            mkWantedEqCt
+              TypeTrace
+                { typeTraceType = rhsTy,
+                  typeTraceRole = ActualType,
+                  typeTraceOrigin = ExpressionTypeOrigin rhsSp
+                }
+              TypeTrace
+                { typeTraceType = resTy,
+                  typeTraceRole = ExpectedType,
+                  typeTraceOrigin = ConstraintTypeOrigin (CaseBranchOrigin branchSp)
+                }
+              resultEv
+              (CaseBranchOrigin rhsSp)
+              rhsSp
+          pat' = annotatePatternBindings (pcBindings patCheck) (checkedPattern patCheck)
+      remainingCts <- solvePatternBranch branchSp patCheck resTy (rhsCts <> [resultCt])
+      -- A constructor pattern can refine the result through its givens, so
+      -- the alternative casts its body like a function equation does.
+      pure (CaseAlt altAnns pat' (annotateRhsCast resTy resultEv rhs'), remainingCts)
+
+inferLambdaCaseAlt :: Maybe SourceSpan -> [TcType] -> TcType -> LambdaCaseAlt -> TcM (LambdaCaseAlt, [Ct])
+inferLambdaCaseAlt sp argTys resTy alt = do
+  let pats = lambdaCaseAltPats alt
+      rhs = lambdaCaseAltRhs alt
+  patCheck <- checkFunctionPatterns sp (zip pats argTys)
+  (rhs', rhsTy, rhsCts) <- withGivenPredicates (map ctPred (pcGivenCts patCheck)) (withPatternBindings (pcBindings patCheck) (checkRhs resTy rhs))
+  ev <- freshEvVar
+  let pats' = map (annotatePatternBindings (pcBindings patCheck)) (pcPatterns patCheck)
+      rhsCt = mkWantedCt (EqPred rhsTy resTy) ev (AppOrigin sp) sp
+  remainingCts <- solvePatternBranch sp patCheck resTy (rhsCts <> [rhsCt])
+  pure (alt {lambdaCaseAltPats = pats', lambdaCaseAltRhs = annotateRhsCast resTy ev rhs'}, remainingCts)
+
+sourceSpanFromAnns :: [Annotation] -> Maybe SourceSpan
+sourceSpanFromAnns anns =
+  listToMaybe (mapMaybe (fromAnnotation @SourceSpan) anns)
+
+-- | An application spine is a head and the frames applied to it, from the
+-- head outwards. A source span, a parenthesis, or a pragma between the
+-- head and an argument is a frame, so @(f x) y@ is one spine and the
+-- quick look at @y@ can use what @x@ revealed.
+data SpineFrame
+  = SpineValueArg (Maybe SourceSpan) Expr
+  | -- | The right operand of an infix operator. The frame rebuilds the
+    -- infix node, so the partial application cannot be instantiated.
+    SpineInfixRhs (Maybe SourceSpan) Expr
+  | SpineTypeArg (Maybe SourceSpan) Type
+  | SpineParen
+  | SpinePragma Pragma
+  | SpineAnn Annotation
+
+data SpineHead
+  = SpineHeadExpr Expr
+  | -- | An infix operator. Its operands are the first two frames.
+    SpineHeadOperator (Maybe SourceSpan) Name
+
+collectSpine :: Maybe SourceSpan -> Expr -> (SpineHead, [SpineFrame])
+collectSpine = go []
+  where
+    go frames sp expr =
+      case expr of
+        EAnn ann inner
+          | Just nodeSpan <- fromAnnotation @SourceSpan ann ->
+              go (SpineAnn ann : frames) (Just nodeSpan) inner
+        EApp fun arg -> go (SpineValueArg sp arg : frames) sp fun
+        ETypeApp fun tyArg -> go (SpineTypeArg sp tyArg : frames) sp fun
+        EParen inner -> go (SpineParen : frames) sp inner
+        EPragma pragma inner -> go (SpinePragma pragma : frames) sp inner
+        EInfix lhs op rhs ->
+          (SpineHeadOperator sp op, SpineValueArg sp lhs : SpineInfixRhs sp rhs : frames)
+        _ -> (SpineHeadExpr expr, frames)
+
+-- | Whether an argument's type is known without inferring it: the
+-- argument is a variable, or an application of a variable. The quick
+-- look reads such an argument before any argument is checked.
+isGuardedArgument :: Expr -> Bool
+isGuardedArgument expr =
+  case expr of
+    EVar {} -> True
+    EApp fun _ -> isGuardedArgument fun
+    ETypeApp fun _ -> isGuardedArgument fun
+    EInfix {} -> True
+    EParen inner -> isGuardedArgument inner
+    EPragma _ inner -> isGuardedArgument inner
+    EAnn ann inner
+      | Just _ <- fromAnnotation @SourceSpan ann -> isGuardedArgument inner
+    _ -> False
+
+-- | A value argument after the quick look, before it is checked.
+data ArgState
+  = ArgDeferred Expr
+  | -- | The argument was inferred by the quick look. The unique boundary
+    -- was taken before the inference, for the escape check.
+    ArgInferred Unique Expr TcType [Ct]
+
+data ArgPlan = ArgPlan
+  { argPlanSpan :: Maybe SourceSpan,
+    -- | The instantiation of the function's polymorphic type before this
+    -- argument, with its wanted constraints.
+    argPlanInstantiation :: Maybe (PendingTcAnnotation, [Ct]),
+    -- | The wanted equality that gives an unknown function type an arrow.
+    argPlanArrowCts :: [Ct],
+    -- | The arrow type the function is cast to, and the evidence of the
+    -- equality that proves the cast. Only set when the function's type was
+    -- not already an arrow.
+    argPlanArrowCast :: Maybe (TcType, EvVar),
+    argPlanExpected :: TcType,
+    argPlanArgument :: ArgState,
+    argPlanIsInfixRhs :: Bool
+  }
+
+data SpineStep
+  = StepArg ArgPlan
+  | StepTypeArg Type [Ct]
+  | StepParen
+  | StepPragma Pragma
+  | StepAnn Annotation
+
+-- | Infer an application spine.
+--
+-- The head is instantiated once. Its fresh meta-variables are the
+-- instantiation variables of the spine. A first pass over the frames
+-- (the plan) walks the function type, infers the guarded arguments, and
+-- quick-look-unifies their types with the expected argument types, which
+-- may bind an instantiation variable to a polytype. A second pass checks
+-- every argument against its zonked expected type: an argument whose
+-- expected type is a polytype is checked against it, any other argument
+-- is inferred and equated. The checked nodes rebuild the source shape.
+inferApplicationSpine :: Maybe SourceSpan -> Expr -> TcM (Expr, TcType, [Ct])
+inferApplicationSpine ambient expr = do
+  let (spineHead, frames) = collectSpine ambient expr
+  (headExpr, headTy, headCts, headTypeArgs) <-
+    case spineHead of
+      SpineHeadExpr headSyntax -> do
+        (headExpr, headTy, headCts) <- inferExprAt ambient headSyntax
+        pure (headExpr, headTy, headCts, pendingTypeArgs headExpr)
+      SpineHeadOperator sp op -> do
+        (op', opTy, opCts) <- inferOperator sp op
+        pure (EVar op', opTy, opCts, nameTypeArgs op')
+  let instantiationVariables = IntSet.fromList (map uniqueKey (concatMap typeMetaVariables headTypeArgs))
+  (steps, resultTy) <- planSpine instantiationVariables headTypeArgs headTy frames
+  (expr', stepCts) <- checkSpineSteps headExpr steps
+  pure (expr', resultTy, headCts <> stepCts)
+
+uniqueKey :: Unique -> Int
+uniqueKey (Unique key) = key
+
+nameTypeArgs :: Name -> [TcType]
+nameTypeArgs name =
+  case mapMaybe (fromAnnotation @PendingTcAnnotation) (nameAnns name) of
+    pending : _ -> pendingTcAnnTypeArgs pending
+    [] -> []
+
+-- | The first pass over the frames. The remaining type arguments are the
+-- instantiation's type arguments that visible type applications have not
+-- consumed yet; a value argument ends them.
+planSpine :: IntSet -> [TcType] -> TcType -> [SpineFrame] -> TcM ([SpineStep], TcType)
+planSpine = go
+  where
+    go _ _ funTy [] = pure ([], funTy)
+    go instantiationVariables remainingTypeArgs funTy (frame : frames) =
+      case frame of
+        SpineAnn ann -> continue (StepAnn ann) instantiationVariables remainingTypeArgs funTy frames
+        SpineParen -> continue StepParen instantiationVariables remainingTypeArgs funTy frames
+        SpinePragma pragma -> continue (StepPragma pragma) instantiationVariables remainingTypeArgs funTy frames
+        SpineTypeArg sp tyArg -> do
+          scoped <- getScopedTyVars
+          case remainingTypeArgs of
+            inferredTy : rest -> do
+              expectedKind <- tcTypeKind inferredTy
+              explicitTy <- checkSurfaceType scoped tyArg expectedKind
+              -- The explicit type may be a polytype. The quick look binds
+              -- the instantiation variable to it; the wanted equality
+              -- then checks the two agree.
+              quickLookUnify instantiationVariables inferredTy explicitTy
+              ev <- freshEvVar
+              let origin = InstOrigin "visible type application"
+                  eqCt =
+                    mkWantedEqCt
+                      TypeTrace
+                        { typeTraceType = inferredTy,
+                          typeTraceRole = InferredType,
+                          typeTraceOrigin = ConstraintTypeOrigin origin
+                        }
+                      TypeTrace
+                        { typeTraceType = explicitTy,
+                          typeTraceRole = RequiredType,
+                          typeTraceOrigin = ConstraintTypeOrigin origin
+                        }
+                      ev
+                      origin
+                      sp
+              continue (StepTypeArg tyArg [eqCt]) instantiationVariables rest funTy frames
+            [] -> do
+              emitError sp (OtherError "visible type application requires a polymorphic expression")
+              continue (StepTypeArg tyArg []) instantiationVariables [] funTy frames
+        SpineValueArg sp arg -> valueArg sp arg False instantiationVariables funTy frames
+        SpineInfixRhs sp arg -> valueArg sp arg True instantiationVariables funTy frames
+
+    continue step instantiationVariables remainingTypeArgs funTy frames = do
+      (steps, resultTy) <- go instantiationVariables remainingTypeArgs funTy frames
+      pure (step : steps, resultTy)
+
+    valueArg sp arg isInfixRhs instantiationVariables funTy frames = do
+      zonkedFunTy <- zonkType funTy
+      -- A function with a polymorphic type, for example a record field
+      -- with a higher-rank type, is instantiated at its application. Its
+      -- fresh meta-variables are instantiation variables too.
+      (instantiation, instantiatedFunTy, instantiationVariables') <-
+        if isPolyType zonkedFunTy && not isInfixRhs
+          then do
+            (instantiated, typeArgs, predicates) <- instantiateSigmaType zonkedFunTy
+            cts <- mapM (predToCt sp "<application>") predicates
+            let pending = pendingAnnotation instantiated typeArgs (map ctEvVar cts) []
+                fresh = IntSet.fromList (map uniqueKey (concatMap typeMetaVariables typeArgs))
+            pure (Just (pending, cts), instantiated, IntSet.union instantiationVariables fresh)
+          else pure (Nothing, zonkedFunTy, instantiationVariables)
+      (expectedArgTy, resultTy, arrowCts, arrowCast) <-
+        case instantiatedFunTy of
+          TcFunTy expectedArgTy resultTy -> pure (expectedArgTy, resultTy, [], Nothing)
+          _ -> do
+            argTy <- freshMetaTv
+            resTy <- freshMetaTv
+            let arrowTy = TcFunTy argTy resTy
+            quickLookUnify instantiationVariables' instantiatedFunTy arrowTy
+            ev <- freshEvVar
+            -- A given equality can be what gives the function an arrow
+            -- type, and then FC needs the cast the proof carries. The
+            -- annotation is dropped again when the proof is reflexivity.
+            pure (argTy, resTy, [mkWantedCt (EqPred instantiatedFunTy arrowTy) ev (AppOrigin sp) sp], Just (arrowTy, ev))
+      argState <-
+        if isGuardedArgument arg
+          then do
+            boundary <- getUniqueBoundary
+            (arg', argTy, argCts) <- inferExpr arg
+            quickLookUnify instantiationVariables' expectedArgTy argTy
+            pure (ArgInferred boundary arg' argTy argCts)
+          else pure (ArgDeferred arg)
+      let plan =
+            ArgPlan
+              { argPlanSpan = sp,
+                argPlanInstantiation = instantiation,
+                argPlanArrowCts = arrowCts,
+                argPlanArrowCast = arrowCast,
+                argPlanExpected = expectedArgTy,
+                argPlanArgument = argState,
+                argPlanIsInfixRhs = isInfixRhs
+              }
+      continue (StepArg plan) instantiationVariables' [] resultTy frames
+
+-- | The second pass: check each argument and rebuild the nodes.
+--
+-- An infix node has the operator as its head and the two operands as its
+-- first two steps. The rebuild of the node needs the operator and the
+-- checked left operand. The walk therefore keeps them from the step of the
+-- left operand: the function of that step is the head of the spine, thus it
+-- is the operator itself and no annotation hides it. An annotation that the
+-- left operand gets is dropped with its application node, because the infix
+-- node replaces that node. An infix operator has its own type, which a
+-- given never refines, thus the annotation holds no necessary evidence.
+checkSpineSteps :: Expr -> [SpineStep] -> TcM (Expr, [Ct])
+checkSpineSteps = go Nothing
+  where
+    go _ fun [] = pure (fun, [])
+    go operand fun (step : steps) =
+      case step of
+        StepAnn ann -> go operand (EAnn ann fun) steps
+        StepParen -> go operand (EParen fun) steps
+        StepPragma pragma -> go operand (EPragma pragma fun) steps
+        StepTypeArg tyArg cts -> do
+          (expr', moreCts) <- go operand (ETypeApp fun tyArg) steps
+          pure (expr', cts <> moreCts)
+        StepArg plan -> do
+          let sp = argPlanSpan plan
+              instantiated = maybe fun (\(pending, _) -> annotatePendingExprAt sp pending fun) (argPlanInstantiation plan)
+              -- An infix node is rebuilt by matching on the function, so
+              -- an annotation there would hide the operator. An infix
+              -- operator's type is its own, never refined by a given.
+              fun' = case argPlanArrowCast plan of
+                Just (arrowTy, ev) | not (argPlanIsInfixRhs plan) -> annotateFunCast arrowTy ev instantiated
+                _ -> instantiated
+              instantiationCts = maybe [] snd (argPlanInstantiation plan)
+          expectedArgTy <- zonkType (argPlanExpected plan)
+          (arg', argCts) <-
+            if isPolyType expectedArgTy
+              then case argPlanArgument plan of
+                ArgDeferred arg -> checkHigherRankArgument sp expectedArgTy arg
+                ArgInferred boundary arg' argTy cts -> checkInferredHigherRankArgument sp boundary expectedArgTy arg' argTy cts
+              else do
+                (arg', argTy, cts) <-
+                  case argPlanArgument plan of
+                    ArgDeferred arg -> checkExpr expectedArgTy arg
+                    ArgInferred _ arg' argTy cts -> pure (arg', argTy, cts)
+                ev <- freshEvVar
+                let eqCt = mkWantedCt (EqPred expectedArgTy argTy) ev (AppOrigin sp) sp
+                -- A given equality can be what makes the argument fit, and
+                -- then FC needs the cast the proof carries. The annotation
+                -- is dropped again when the proof is reflexivity.
+                pure (annotateExprCast expectedArgTy ev arg', cts <> [eqCt])
+          node <-
+            if argPlanIsInfixRhs plan
+              then case operand of
+                Just (op', lhs') -> pure (EInfix lhs' op' arg')
+                Nothing -> abortTc ("infix operator application lost its operator node at " <> show sp)
+              else pure (EApp fun' arg')
+          let operand' = case fun of
+                EVar op' -> Just (op', arg')
+                _ -> Nothing
+          (expr', moreCts) <- go operand' node steps
+          pure (expr', instantiationCts <> argPlanArrowCts plan <> argCts <> moreCts)
+
+-- | Check an argument against a polytype. The argument is inferred and
+-- its type unified with the skolemized polytype.
+--
+-- An expression that takes the expected type (a @do@ block, a @case@)
+-- is checked against the skolemized body instead: the result type of a
+-- @do@ block that the polytype fixes must reach its statements, or a
+-- type family application over the monad is stuck while they are
+-- checked and a meta variable is solved the wrong way.
+checkHigherRankArgument :: Maybe SourceSpan -> TcType -> Expr -> TcM (Expr, [Ct])
+checkHigherRankArgument sp expectedTy arg
+  | checksExpectedResult arg = do
+      boundary <- getUniqueBoundary
+      skolemized@(_, _, expectedBody) <- skolemizeSigmaType expectedTy
+      (arg', actualTy, argCts) <- checkExpr expectedBody arg
+      finishHigherRankArgument sp boundary expectedTy skolemized arg' actualTy argCts
+  | otherwise = do
+      boundary <- getUniqueBoundary
+      (arg', actualTy, argCts) <- inferExpr arg
+      checkInferredHigherRankArgument sp boundary expectedTy arg' actualTy argCts
+
+-- | Check an already inferred argument against a polytype. The boundary
+-- was taken before the inference: a meta-variable older than it must not
+-- mention the skolems.
+checkInferredHigherRankArgument :: Maybe SourceSpan -> Unique -> TcType -> Expr -> TcType -> [Ct] -> TcM (Expr, [Ct])
+checkInferredHigherRankArgument sp boundary expectedTy arg' actualTy argCts = do
+  skolemized <- skolemizeSigmaType expectedTy
+  finishHigherRankArgument sp boundary expectedTy skolemized arg' actualTy argCts
+
+-- | Tie an argument of a higher-rank application to the skolemized
+-- polytype it was checked or inferred against.
+finishHigherRankArgument :: Maybe SourceSpan -> Unique -> TcType -> ([TyVarId], [Pred], TcType) -> Expr -> TcType -> [Ct] -> TcM (Expr, [Ct])
+finishHigherRankArgument sp boundary expectedTy (skolems, predicates, expectedBody) arg' actualTy argCts = do
+  -- An equality that a stuck type family application leaves undecided
+  -- becomes a wanted: the meta variable that blocks the reduction may
+  -- only be solved by a later part of the enclosing binding.
+  deferred <- unifyDeferring sp (AppOrigin sp) actualTy expectedBody
+  deferredCts <- mapM deferredConstraint deferred
+  rejectEscapingHigherRankMetas sp boundary skolems actualTy
+  givenCts <- mapM makeGiven predicates
+  let (equalityCts, dictionaryCts) = partition isEqualityConstraint (argCts <> deferredCts)
+  residualEqualities <- concat <$> mapM (solveEqualityConstraint predicates) equalityCts
+  residualDictionaries <- concat <$> mapM (solveDictionary predicates) dictionaryCts
+  let annotatedArg = annotatePendingExprAt sp (pendingTypeLambdaAnnotation expectedTy skolems (map ctEvVar givenCts)) arg'
+  pure (annotatedArg, residualEqualities <> residualDictionaries)
+  where
+    deferredConstraint (left, right) = do
+      evidence <- freshEvVar
+      pure (mkWantedCt (EqPred left right) evidence (AppOrigin sp) sp)
+
+    makeGiven predicate = do
+      evidence <- freshEvVar
+      bindEvidence evidence (EvGiven predicate)
+      pure ((mkWantedCt predicate evidence (AppOrigin sp) sp) {ctFlavor = Given})
+
+    isEqualityConstraint ct =
+      case ctPred ct of
+        EqPred {} -> True
+        _ -> False
+
+    solveEqualityConstraint givens ct = do
+      result <- withGivenPredicates givens (solveEquality ct)
+      pure $ case result of
+        EqSolved -> []
+        EqStuck stuck -> [stuck]
+        EqError err -> [err]
+
+    solveDictionary givens ct = do
+      result <- solveDictWithGivens givens ct
+      pure $ case result of
+        DictSolved -> []
+        DictStuck stuck -> [stuck]
+
+instantiateSigmaType :: TcType -> TcM (TcType, [TcType], [Pred])
+instantiateSigmaType = go []
+  where
+    go arguments (TcForAllTy binder body) = do
+      argument <- freshMetaTvOfKind (tvKind binder)
+      go (arguments <> [argument]) (applySubst (Map.singleton (tvUnique binder) argument) body)
+    go arguments (TcQualTy predicates body) = pure (body, arguments, predicates)
+    go arguments ty = pure (ty, arguments, [])
+
+skolemizeSigmaType :: TcType -> TcM ([TyVarId], [Pred], TcType)
+skolemizeSigmaType = go [] []
+  where
+    go skolems predicates (TcForAllTy binder body) = do
+      skolem <- setTyVarKind (tvKind binder) <$> freshSkolemTv (tvName binder)
+      go (skolems <> [skolem]) predicates (applySubst (Map.singleton (tvUnique binder) (TcTyVar skolem)) body)
+    go skolems predicates (TcQualTy morePredicates body) =
+      go skolems (predicates <> morePredicates) body
+    go skolems predicates ty = pure (skolems, predicates, ty)
+
+rejectEscapingHigherRankMetas :: Maybe SourceSpan -> Unique -> [TyVarId] -> TcType -> TcM ()
+rejectEscapingHigherRankMetas sp (Unique boundaryInt) skolems actualTy = do
+  let olderMetas = filter (isOlderThan boundaryInt) (typeMetaVariables actualTy)
+  escaped <- anyM (metaMentionsAnySkolem skolems) olderMetas
+  when escaped $
+    emitError sp (OtherError "higher-rank type variable escapes its argument")
+  where
+    isOlderThan threshold (Unique metaInt) = metaInt < threshold
+
+metaMentionsAnySkolem :: [TyVarId] -> Unique -> TcM Bool
+metaMentionsAnySkolem skolems meta = do
+  ty <- zonkType (TcMetaTv meta)
+  pure (any (`typeMentionsTyVar` ty) skolems)
+
+anyM :: (a -> TcM Bool) -> [a] -> TcM Bool
+anyM _ [] = pure False
+anyM predicate (value : values) = do
+  matches <- predicate value
+  if matches then pure True else anyM predicate values
+
+typeMetaVariables :: TcType -> [Unique]
+typeMetaVariables ty =
+  case ty of
+    TcTyVar {} -> []
+    TcArrowTy -> []
+    TcTyLit {} -> []
+    TcMetaTv meta -> [meta]
+    TcTyCon _ arguments -> concatMap typeMetaVariables arguments
+    TcFunTy argument result -> typeMetaVariables argument <> typeMetaVariables result
+    TcForAllTy _ body -> typeMetaVariables body
+    TcQualTy predicates body -> concatMap predicateMetaVariables predicates <> typeMetaVariables body
+    TcAppTy function argument -> typeMetaVariables function <> typeMetaVariables argument
+
+predicateMetaVariables :: Pred -> [Unique]
+predicateMetaVariables predicate =
+  case predicate of
+    ClassPred _ arguments -> concatMap typeMetaVariables arguments
+    EqPred left right -> typeMetaVariables left <> typeMetaVariables right
+    IParamPred _ payload -> typeMetaVariables payload
+    IrredPred constraint -> typeMetaVariables constraint
+    QuantifiedPred variables antecedents consequent ->
+      concatMap (typeMetaVariables . tvKind) variables
+        <> concatMap predicateMetaVariables antecedents
+        <> predicateMetaVariables consequent
+
+pendingTypeArgs :: Expr -> [TcType]
+pendingTypeArgs expr =
+  case expr of
+    EAnn ann inner ->
+      case fromAnnotation @PendingTcAnnotation ann of
+        Just pending -> drop (pendingTcAnnInferredTypeArgs pending) (pendingTcAnnTypeArgs pending)
+        Nothing -> pendingTypeArgs inner
+    ETypeApp fun _ -> pendingTypeArgs fun
+    EParen inner -> pendingTypeArgs inner
+    EPragma _ inner -> pendingTypeArgs inner
+    _ -> []
+
+inferSectionL :: Maybe SourceSpan -> Expr -> Name -> TcM (Expr, TcType, [Ct])
+inferSectionL sp inner op = do
+  (op', opTy, opCts) <- inferOperator sp op
+  (inner', innerTy, innerCts) <- inferExpr inner
+  argumentTy <- freshMetaTv
+  resultTy <- freshMetaTv
+  evidence <- freshEvVar
+  let sectionTy = TcFunTy argumentTy resultTy
+      pending = pendingAnnotation sectionTy [] [] [argumentTy]
+      wanted = mkWantedCt (EqPred opTy (TcFunTy innerTy sectionTy)) evidence (AppOrigin sp) sp
+  pure (annotatePendingExprAt sp pending (ESectionL inner' op'), sectionTy, opCts <> innerCts <> [wanted])
+
+inferSectionR :: Maybe SourceSpan -> Name -> Expr -> TcM (Expr, TcType, [Ct])
+inferSectionR sp op inner = do
+  (op', opTy, opCts) <- inferOperator sp op
+  (inner', innerTy, innerCts) <- inferExpr inner
+  argumentTy <- freshMetaTv
+  resultTy <- freshMetaTv
+  evidence <- freshEvVar
+  let sectionTy = TcFunTy argumentTy resultTy
+      pending = pendingAnnotation sectionTy [] [] [argumentTy]
+      wanted = mkWantedCt (EqPred opTy (TcFunTy argumentTy (TcFunTy innerTy resultTy))) evidence (AppOrigin sp) sp
+  pure (annotatePendingExprAt sp pending (ESectionR op' inner'), sectionTy, opCts <> innerCts <> [wanted])
+
+inferIf :: Maybe SourceSpan -> Expr -> Expr -> Expr -> TcM (Expr, TcType, [Ct])
+inferIf sp cond thenE elseE = do
+  (cond', condTy, condCts) <- inferExpr cond
+  (thenE', thenTy, thenCts) <- inferExpr thenE
+  (elseE', elseTy, elseCts) <- inferExpr elseE
+  resultTy <- freshMetaTv
+  condEv <- freshEvVar
+  expectedBoolTy <- boolType
+  let condCt = mkWantedCt (EqPred condTy expectedBoolTy) condEv (AppOrigin sp) sp
+  thenEv <- freshEvVar
+  elseEv <- freshEvVar
+  let thenCt = mkWantedCt (EqPred thenTy resultTy) thenEv (AppOrigin sp) sp
+      elseCt = mkWantedCt (EqPred elseTy resultTy) elseEv (AppOrigin sp) sp
+      pending = pendingAnnotation resultTy [] [] []
+  pure (annotatePendingExprAt sp pending (EIf cond' thenE' elseE'), resultTy, condCts ++ thenCts ++ elseCts ++ [condCt, thenCt, elseCt])
+
+-- | A multi-way if is a guarded right-hand side without a binding. Each
+-- alternative has the result type.
+inferMultiWayIf :: Maybe SourceSpan -> [GuardedRhs Expr] -> TcM (Expr, TcType, [Ct])
+inferMultiWayIf sp alternatives = do
+  (alternatives', resultTy, cts) <- inferGuardedRhss inferExpr alternatives
+  let pending = pendingAnnotation resultTy [] [] []
+  pure (annotatePendingExprAt sp pending (EMultiWayIf alternatives'), resultTy, cts)
+
+-- | RebindableSyntax gives an if expression the in-scope ifThenElse.
+--
+-- The method annotation sits inside the result annotation. The desugarer
+-- applies the method to the condition and the two branches.
+inferRebindableIf :: Maybe SourceSpan -> Annotation -> ResolutionAnnotation -> Expr -> Expr -> Expr -> TcM (Expr, TcType, [Ct])
+inferRebindableIf sp resolutionAnn resolution cond thenE elseE = do
+  (cond', condTy, condCts) <- inferExpr cond
+  (thenE', thenTy, thenCts) <- inferExpr thenE
+  (elseE', elseTy, elseCts) <- inferExpr elseE
+  (methodTy, typeArgs, methodCts) <- inferResolvedSyntaxMethod sp "ifThenElse" resolution
+  resultTy <- freshMetaTv
+  equalityEvidence <- freshEvVar
+  let expectedMethodTy = TcFunTy condTy (TcFunTy thenTy (TcFunTy elseTy resultTy))
+      methodEquality = mkWantedCt (EqPred methodTy expectedMethodTy) equalityEvidence (OccurrenceOf "ifThenElse") sp
+      methodPending = pendingAnnotation methodTy typeArgs (map ctEvVar methodCts) []
+      resultPending = pendingAnnotation resultTy [] [] []
+      annotated = annotatePendingExpr methodPending (EAnn resolutionAnn (EIf cond' thenE' elseE'))
+  pure
+    ( annotatePendingExprAt sp resultPending annotated,
+      resultTy,
+      condCts <> thenCts <> elseCts <> methodCts <> [methodEquality]
+    )
+
+-- | Negation applies the resolved negate method to its operand.
+--
+-- The method annotation sits inside the result annotation. The desugarer
+-- applies the method to the operand.
+inferNegate :: Maybe SourceSpan -> Annotation -> ResolutionAnnotation -> Expr -> TcM (Expr, TcType, [Ct])
+inferNegate sp resolutionAnn resolution inner = do
+  (inner', innerTy, innerCts) <- inferExpr inner
+  (methodTy, typeArgs, methodCts) <- inferResolvedSyntaxMethod sp "negate" resolution
+  resultTy <- freshMetaTv
+  equalityEvidence <- freshEvVar
+  let expectedMethodTy = TcFunTy innerTy resultTy
+      methodEquality = mkWantedCt (EqPred methodTy expectedMethodTy) equalityEvidence (OccurrenceOf "negate") sp
+      methodPending = pendingAnnotation methodTy typeArgs (map ctEvVar methodCts) []
+      resultPending = pendingAnnotation resultTy [] [] []
+      annotated = annotatePendingExpr methodPending (EAnn resolutionAnn (ENegate inner'))
+  pure
+    ( annotatePendingExprAt sp resultPending annotated,
+      resultTy,
+      innerCts <> methodCts <> [methodEquality]
+    )
+
+inferTuple :: Maybe SourceSpan -> TupleFlavor -> [Maybe Expr] -> TcM (Expr, TcType, [Ct])
+inferTuple sp flavor elems = do
+  results <- mapM inferElem elems
+  let elems' = map (\(expr, _, _) -> expr) results
+      tys = map (\(_, ty, _) -> ty) results
+      cts = concatMap (\(_, _, elemCts) -> elemCts) results
+      n = length tys
+  kinds <- getKinds
+  wired <- wiredTupleTyCon flavor n
+  elementKinds <- mapM tcTypeKind tys
+  let fallbackKind =
+        case flavor of
+          Boxed -> foldr KFun (typeKind kinds) elementKinds
+          Unboxed -> foldr KFun (mkTYPEKind kinds (tupleRep kinds (map (runtimeRepOrLifted kinds) elementKinds))) elementKinds
+  -- The wiring gives the full identity of the tuple type constructor.
+  -- A bare name lookup can find a different constructor with the same name.
+  tc <- mkWiredTyCon wired fallbackKind
+  -- A tuple section such as @(0,)@ is a function of its missing fields.
+  let tupleTy = TcTyCon tc tys
+      missingTys = [ty | (Nothing, ty, _) <- results]
+      sectionTy = foldr TcFunTy tupleTy missingTys
+      pending = pendingAnnotation sectionTy tys [] []
+  pure (annotatePendingExprAt sp pending (ETuple flavor elems'), sectionTy, cts)
+  where
+    inferElem Nothing = do
+      ty <- freshMetaTv
+      pure (Nothing, ty, [])
+    inferElem (Just e) = do
+      (e', ty, cts) <- inferExpr e
+      pure (Just e', ty, cts)
+
+    runtimeRepOrLifted kinds kind = fromRight (liftedRep kinds) (runtimeRepFromKind kind)
+
+inferList :: Maybe SourceSpan -> [Expr] -> TcM (Expr, TcType, [Ct])
+inferList sp elems = do
+  (nilCon, nilInstantiation) <- instantiateListConstructor sp tcWiringNilDataCon
+  nilCts <- mapM (predToCt sp (tyConName nilCon)) (instPreds nilInstantiation)
+  case elems of
+    [] -> do
+      let listTy = instType nilInstantiation
+          pending = pendingAnnotation listTy (instTypeArgs nilInstantiation) (map ctEvVar nilCts) []
+      pure (annotatePendingExprAt sp pending (EList []), listTy, nilCts)
+    _ -> do
+      results <- mapM inferElem elems
+      (consCon, consInstantiation) <- instantiateListConstructor sp tcWiringConsDataCon
+      consPredicateCts <- mapM (predToCt sp (tyConName consCon)) (instPreds consInstantiation)
+      case instType consInstantiation of
+        TcFunTy sourceElemTy (TcFunTy sourceTailTy sourceResultTy) -> do
+          let elems' = map (\(element, _, _, _) -> element) results
+              elemCts = concatMap (\(_, _, cts, _) -> cts) results
+              (firstElemTy, firstElemSp) = case results of
+                (_, ty, _, elemSp) : _ -> (ty, elemSp)
+                [] -> (sourceElemTy, sp)
+              pending = pendingAnnotation sourceResultTy [sourceElemTy] [] []
+          firstConstructorCt <- constructorEqualityCt firstElemSp firstElemTy sourceElemTy
+          nilConstructorCt <- constructorEqualityCt sp (instType nilInstantiation) sourceTailTy
+          resultConstructorCt <- constructorEqualityCt sp sourceResultTy sourceTailTy
+          elementEqualityCts <- mapM (elementEqualityCt firstElemSp firstElemTy) (drop 1 results)
+          let constructorCts = nilCts <> consPredicateCts <> [firstConstructorCt, nilConstructorCt, resultConstructorCt]
+          pure (annotatePendingExprAt sp pending (EList elems'), sourceResultTy, elemCts <> elementEqualityCts <> constructorCts)
+        _ -> abortTc "the wired list cons constructor has an invalid type"
+  where
+    inferElem elemExpr = do
+      (elemExpr', elemTy, elemCts) <- inferExpr elemExpr
+      pure (elemExpr', elemTy, elemCts, exprSpan elemExpr <|> sp)
+    constructorEqualityCt loc left right = do
+      ev <- freshEvVar
+      pure (mkWantedCt (EqPred left right) ev (AppOrigin loc) loc)
+    elementEqualityCt firstElemSp firstElemTy (_, elemTy, _, elemSp) = do
+      ev <- freshEvVar
+      pure $
+        mkWantedEqCt
+          TypeTrace
+            { typeTraceType = elemTy,
+              typeTraceRole = ActualType,
+              typeTraceOrigin = ExpressionTypeOrigin elemSp
+            }
+          TypeTrace
+            { typeTraceType = firstElemTy,
+              typeTraceRole = ExpectedType,
+              typeTraceOrigin = ListElementTypeOrigin firstElemSp
+            }
+          ev
+          (AppOrigin elemSp)
+          elemSp
+
+inferArithSeq :: Maybe SourceSpan -> ArithSeq -> TcM (Expr, TcType, [Ct])
+inferArithSeq sp arithSeq = do
+  (arithSeq', resultTy, cts) <- inferArithSeqNode sp arithSeq
+  let pending = pendingAnnotation resultTy [] [] []
+  pure (annotatePendingExprAt sp pending (EArithSeq arithSeq'), resultTy, cts)
+
+inferArithSeqNode :: Maybe SourceSpan -> ArithSeq -> TcM (ArithSeq, TcType, [Ct])
+inferArithSeqNode sp arithSeq =
+  case arithSeq of
+    ArithSeqAnn ann inner
+      | Just resolution <- fromAnnotation @ResolutionAnnotation ann,
+        isArithSeqResolution resolution ->
+          inferResolvedArithSeq sp ann resolution inner
+      | otherwise -> do
+          (inner', resultTy, cts) <- inferArithSeqNode sp inner
+          pure (ArithSeqAnn ann inner', resultTy, cts)
+    _ -> abortTc "arithmetic sequence is missing its resolved method"
+
+inferResolvedArithSeq :: Maybe SourceSpan -> Annotation -> ResolutionAnnotation -> ArithSeq -> TcM (ArithSeq, TcType, [Ct])
+inferResolvedArithSeq sp resolutionAnn resolution arithSeq = do
+  (arithSeq', argumentTypes, argumentCts) <- inferArithSeqForm arithSeq
+  let methodName = displayIdentifier (resolutionIdentifier resolution)
+  (methodTy, typeArgs, methodCts) <- inferResolvedSyntaxMethod sp methodName resolution
+  resultTy <- freshMetaTv
+  equalityEvidence <- freshEvVar
+  let expectedMethodTy = foldr TcFunTy resultTy argumentTypes
+      methodEquality = mkWantedCt (EqPred methodTy expectedMethodTy) equalityEvidence (OccurrenceOf methodName) sp
+      methodPending = pendingAnnotation methodTy typeArgs (map ctEvVar methodCts) []
+      annotated = ArithSeqAnn (mkAnnotation methodPending) (ArithSeqAnn resolutionAnn arithSeq')
+  pure (annotated, resultTy, argumentCts <> methodCts <> [methodEquality])
+
+-- | Instantiate a resolved syntax method such as enumFrom or ifThenElse.
+inferResolvedSyntaxMethod :: Maybe SourceSpan -> Text -> ResolutionAnnotation -> TcM (TcType, [TcType], [Ct])
+inferResolvedSyntaxMethod sp methodName resolution = do
+  mBinder <- lookupResolvedTerm methodName (resolutionTarget resolution)
+  case mBinder of
+    Just (TcIdBinder scheme _) -> do
+      inst <- instantiateWithArgs scheme
+      cts <- mapM (predToCt sp methodName) (instPreds inst)
+      pure (instType inst, instTypeArgs inst, cts)
+    Just (TcMonoIdBinder ty) -> pure (ty, [], [])
+    Nothing ->
+      abortTc ("resolved " <> T.unpack methodName <> " is missing from the type environment: " <> show (resolutionTarget resolution))
+
+inferArithSeqForm :: ArithSeq -> TcM (ArithSeq, [TcType], [Ct])
+inferArithSeqForm arithSeq =
+  case arithSeq of
+    ArithSeqAnn ann inner -> do
+      (inner', types, cts) <- inferArithSeqForm inner
+      pure (ArithSeqAnn ann inner', types, cts)
+    ArithSeqFrom from -> inferForm ArithSeqFrom [from]
+    ArithSeqFromThen from thenExpr -> inferForm2 ArithSeqFromThen from thenExpr
+    ArithSeqFromTo from to -> inferForm2 ArithSeqFromTo from to
+    ArithSeqFromThenTo from thenExpr to -> do
+      results <- mapM inferExpr [from, thenExpr, to]
+      case results of
+        [(from', fromTy, fromCts), (thenExpr', thenTy, thenCts), (to', toTy, toCts)] ->
+          pure (ArithSeqFromThenTo from' thenExpr' to', [fromTy, thenTy, toTy], fromCts <> thenCts <> toCts)
+        _ -> abortTc "arithmetic sequence has an invalid argument count"
+  where
+    inferForm constructor expressions = do
+      results <- mapM inferExpr expressions
+      case results of
+        [(expression', ty, cts)] -> pure (constructor expression', [ty], cts)
+        _ -> abortTc "arithmetic sequence has an invalid argument count"
+    inferForm2 constructor first second = do
+      (first', firstTy, firstCts) <- inferExpr first
+      (second', secondTy, secondCts) <- inferExpr second
+      pure (constructor first' second', [firstTy, secondTy], firstCts <> secondCts)
+
+-- | The identity and an instantiation of one wired list constructor.
+instantiateListConstructor :: Maybe SourceSpan -> (TcWiring -> TyCon) -> TcM (TyCon, Instantiation)
+instantiateListConstructor sp select = do
+  wired <- wiredTyConIdentity select
+  maybeBinder <- lookupWiredTerm wired
+  let name = tyConName wired
+  case maybeBinder of
+    Just (TcIdBinder scheme _) -> (,) wired <$> instantiateWithArgs scheme
+    Just TcMonoIdBinder {} ->
+      abortTc ("the wired list constructor is monomorphic at " <> show sp <> ": " <> show name)
+    Nothing ->
+      abortTc ("the wired list constructor is missing at " <> show sp <> ": " <> show name)
+
+inferListComp :: Maybe SourceSpan -> Expr -> [CompStmt] -> TcM (Expr, TcType, [Ct])
+inferListComp sp body quals = do
+  listTyCon' <- resolvedListTyCon
+  (quals', body', bodyTy, cts) <- inferCompQuals listTyCon' sp quals (inferExpr body)
+  let resultTy = listType listTyCon' bodyTy
+      pending = pendingAnnotation resultTy [bodyTy] [] []
+  pure (annotatePendingExprAt sp pending (EListComp body' quals'), resultTy, cts)
+  where
+    listType tyCon elemTy = TcTyCon tyCon [elemTy]
+    inferCompQuals _ _ [] action = do
+      (body', bodyTy, bodyCts) <- action
+      pure ([], body', bodyTy, bodyCts)
+    inferCompQuals listTyCon' ambient (qual : rest) action =
+      case qual of
+        CompAnn ann inner -> do
+          (stmts', body', bodyTy, cts) <- inferCompQuals listTyCon' (compStmtSpan qual <|> ambient) (inner : rest) action
+          case stmts' of
+            inner' : rest' -> pure (CompAnn ann inner' : rest', body', bodyTy, cts)
+            [] -> pure ([], body', bodyTy, cts)
+        CompGen pat src -> do
+          elemTy <- freshMetaTv
+          (src', srcTy, srcCts) <- inferExpr src
+          patCheck <- checkPattern ambient pat elemTy
+          ev <- freshEvVar
+          let srcSp = exprSpan src <|> ambient
+              srcListCt = mkWantedCt (EqPred srcTy (listType listTyCon' elemTy)) ev (AppOrigin srcSp) srcSp
+          (rest', body', bodyTy, bodyCts) <- withPatternBindings (pcBindings patCheck) (inferCompQuals listTyCon' ambient rest action)
+          remainingCts <- solvePatternBranch ambient patCheck bodyTy bodyCts
+          pure (CompGen (annotatePatternBindings (pcBindings patCheck) (checkedPattern patCheck)) src' : rest', body', bodyTy, srcCts ++ [srcListCt] ++ remainingCts)
+        CompGuard guard -> do
+          (guard', guardTy, guardCts) <- inferExpr guard
+          ev <- freshEvVar
+          expectedBoolTy <- boolType
+          let guardSp = exprSpan guard <|> ambient
+              guardCt = mkWantedCt (EqPred guardTy expectedBoolTy) ev (AppOrigin guardSp) guardSp
+          (rest', body', bodyTy, bodyCts) <- inferCompQuals listTyCon' ambient rest action
+          pure (CompGuard guard' : rest', body', bodyTy, guardCts ++ [guardCt] ++ bodyCts)
+        CompLetDecls decls -> do
+          (decls', (rest', body'), bodyTy, bodyCts) <-
+            inferLocalDecls inferExpr decls $ do
+              (rest', body', bodyTy, bodyCts) <- inferCompQuals listTyCon' ambient rest action
+              pure ((rest', body'), bodyTy, bodyCts)
+          pure (CompLetDecls decls' : rest', body', bodyTy, bodyCts)
+        CompThen {} -> unsupportedQual listTyCon' qual ambient rest action
+        CompThenBy {} -> unsupportedQual listTyCon' qual ambient rest action
+        CompGroupUsing {} -> unsupportedQual listTyCon' qual ambient rest action
+        CompGroupByUsing {} -> unsupportedQual listTyCon' qual ambient rest action
+
+    unsupportedQual listTyCon' qual ambient rest action = do
+      let qualSp = compStmtSpan qual <|> ambient
+      emitError qualSp (OtherError ("unsupported list comprehension qualifier in TC MVP: " ++ take 50 (show qual)))
+      inferCompQuals listTyCon' ambient rest action
+
+resolvedListTyCon :: TcM TyCon
+resolvedListTyCon = listTyConOfWiring
+
+inferDo :: Maybe SourceSpan -> DoFlavor -> [DoStmt Expr] -> TcM (Expr, TcType, [Ct])
+inferDo sp flavor stmts =
+  case flavor of
+    DoPlain -> do
+      (stmts', resultTy, cts) <- inferDoStmts sp stmts
+      let pending = pendingAnnotation resultTy [] [] []
+      pure (annotatePendingExprAt sp pending (EDo stmts' flavor), resultTy, cts)
+    _ -> do
+      emitError sp (OtherError ("unsupported do flavor in TC MVP: " ++ show flavor))
+      resultTy <- freshMetaTv
+      pure (EDo stmts flavor, resultTy, [])
+
+inferDoStmts :: Maybe SourceSpan -> [DoStmt Expr] -> TcM ([DoStmt Expr], TcType, [Ct])
+inferDoStmts = inferDoStmtsWith Nothing
+
+inferDoStmtsWith :: Maybe TcType -> Maybe SourceSpan -> [DoStmt Expr] -> TcM ([DoStmt Expr], TcType, [Ct])
+inferDoStmtsWith expected sp stmts =
+  case stmts of
+    [] -> do
+      emitError sp (OtherError "empty do block in TC MVP")
+      resultTy <- freshMetaTv
+      pure ([], resultTy, [])
+    [stmt] -> inferLastDoStmt expected sp stmt
+    stmt : rest -> inferDoStmt expected sp stmt rest
+
+inferLastDoStmt :: Maybe TcType -> Maybe SourceSpan -> DoStmt Expr -> TcM ([DoStmt Expr], TcType, [Ct])
+inferLastDoStmt expected ambient stmt =
+  case stmt of
+    DoAnn ann inner -> do
+      (stmts', resultTy, cts) <- inferLastDoStmt expected (doStmtSpan stmt <|> ambient) inner
+      case stmts' of
+        [inner'] -> pure ([DoAnn ann inner'], resultTy, cts)
+        _ -> pure (stmts', resultTy, cts)
+    DoExpr body -> do
+      (body', bodyTy, cts) <- maybe (inferExprAt ambient body) (`checkExpr` body) expected
+      pure ([DoExpr body'], bodyTy, cts)
+    _ -> do
+      emitError ambient (OtherError "the last statement in a do block must be an expression")
+      resultTy <- freshMetaTv
+      pure ([stmt], resultTy, [])
+
+inferDoStmt :: Maybe TcType -> Maybe SourceSpan -> DoStmt Expr -> [DoStmt Expr] -> TcM ([DoStmt Expr], TcType, [Ct])
+inferDoStmt expected ambient stmt rest =
+  case stmt of
+    DoAnn ann inner
+      | Just resolution <- fromAnnotation @ResolutionAnnotation ann,
+        isDoMethodResolution resolution ->
+          inferResolvedDoStmt expected ambient ann resolution inner rest
+    DoAnn ann inner -> do
+      (stmts', resultTy, cts) <- inferDoStmt expected (doStmtSpan stmt <|> ambient) inner rest
+      case stmts' of
+        inner' : rest' -> pure (DoAnn ann inner' : rest', resultTy, cts)
+        [] -> pure ([], resultTy, cts)
+    DoBind pat action -> do
+      monadTy <- freshMetaTv
+      itemTy <- freshMetaTv
+      resultItemTy <- freshMetaTv
+      (action', actionTy, actionCts) <- inferExprAt ambient action
+      patCheck <- checkPattern ambient pat itemTy
+      (rest', resultTy, restCts) <-
+        withPatternBindings (pcBindings patCheck) (inferDoStmtsWith expected ambient rest)
+      actionEq <- wantedDoEq ambient actionTy (TcAppTy monadTy itemTy)
+      resultEq <- wantedDoEq ambient resultTy (TcAppTy monadTy resultItemTy)
+      monadCt <- wantedMonad ambient monadTy
+      let pat' = annotatePatternBindings (pcBindings patCheck) (checkedPattern patCheck)
+      remainingCts <- solvePatternBranch ambient patCheck resultTy restCts
+      pure
+        ( DoBind pat' action' : rest',
+          resultTy,
+          actionCts <> remainingCts <> [actionEq, resultEq, monadCt]
+        )
+    DoExpr action -> do
+      monadTy <- freshMetaTv
+      itemTy <- freshMetaTv
+      resultItemTy <- freshMetaTv
+      (action', actionTy, actionCts) <- inferExprAt ambient action
+      (rest', resultTy, restCts) <- inferDoStmtsWith expected ambient rest
+      actionEq <- wantedDoEq ambient actionTy (TcAppTy monadTy itemTy)
+      resultEq <- wantedDoEq ambient resultTy (TcAppTy monadTy resultItemTy)
+      monadCt <- wantedMonad ambient monadTy
+      pure
+        ( DoExpr action' : rest',
+          resultTy,
+          actionCts <> restCts <> [actionEq, resultEq, monadCt]
+        )
+    DoLetDecls decls -> do
+      (decls', rest', resultTy, cts) <-
+        inferLocalDecls inferExpr decls $ do
+          (rest', resultTy, restCts) <- inferDoStmtsWith expected ambient rest
+          pure (rest', resultTy, restCts)
+      pure (DoLetDecls decls' : rest', resultTy, cts)
+    DoRecStmt _ -> do
+      emitError ambient (OtherError "recursive do statements are unsupported in TC MVP")
+      (rest', resultTy, cts) <- inferDoStmtsWith expected ambient rest
+      pure (stmt : rest', resultTy, cts)
+
+inferResolvedDoStmt :: Maybe TcType -> Maybe SourceSpan -> Annotation -> ResolutionAnnotation -> DoStmt Expr -> [DoStmt Expr] -> TcM ([DoStmt Expr], TcType, [Ct])
+inferResolvedDoStmt expected ambient resolutionAnn resolution stmt rest =
+  case stmt of
+    DoBind pat action -> do
+      itemTy <- freshMetaTv
+      restExpected <- freshMetaTv
+      blockTy <- maybe freshMetaTv pure expected
+      (action', actionTy, actionCts) <- inferExprAt ambient action
+      let bindTy = TcFunTy actionTy (TcFunTy (TcFunTy itemTy restExpected) blockTy)
+      (pending, methodCts) <- inferDoMethod ambient ">>=" resolution bindTy
+      prepareScrutinee (actionCts <> methodCts)
+      patCheck <- checkPattern ambient pat itemTy
+      (rest', restTy, restCts) <-
+        withGivenPredicates (map ctPred (pcGivenCts patCheck)) $
+          withPatternBindings (pcBindings patCheck) (inferDoStmtsWith (Just restExpected) ambient rest)
+      resultEquality <- wantedDoEq ambient restTy restExpected
+      let pat' = annotatePatternBindings (pcBindings patCheck) (checkedPattern patCheck)
+          stmt' = DoAnn (mkAnnotation pending) (DoAnn resolutionAnn (DoBind pat' action'))
+      remainingCts <- solvePatternBranch ambient patCheck restExpected (restCts <> [resultEquality])
+      pure (stmt' : rest', blockTy, actionCts <> remainingCts <> methodCts)
+    DoExpr action -> do
+      restExpected <- freshMetaTv
+      blockTy <- maybe freshMetaTv pure expected
+      (action', actionTy, actionCts) <- inferExprAt ambient action
+      let thenTy = TcFunTy actionTy (TcFunTy restExpected blockTy)
+      (pending, methodCts) <- inferDoMethod ambient ">>" resolution thenTy
+      prepareScrutinee (actionCts <> methodCts)
+      (rest', restTy, restCts) <- inferDoStmtsWith (Just restExpected) ambient rest
+      resultEquality <- wantedDoEq ambient restTy restExpected
+      let stmt' = DoAnn (mkAnnotation pending) (DoAnn resolutionAnn (DoExpr action'))
+      pure (stmt' : rest', blockTy, actionCts <> restCts <> methodCts <> [resultEquality])
+    _ -> do
+      emitError ambient (OtherError "internal do-bind annotation on a non-action statement")
+      inferDoStmt expected ambient stmt rest
+
+-- | The constraint that equates the argument of a literal method with the
+-- resolved type of the literal.
+--
+-- The list is empty when the built-in scope does not give that type.
+resolvedLiteralCts :: Maybe SourceSpan -> ResolutionAnnotation -> TcType -> TcM [Ct]
+resolvedLiteralCts sp literalResolution argumentTy = do
+  maybeInfo <- lookupResolvedTypeSyntax literalResolution
+  case maybeInfo of
+    Nothing -> pure []
+    Just info -> do
+      ev <- freshEvVar
+      pure [mkWantedCt (EqPred argumentTy (TcTyCon (tciTyCon info) [])) ev (LitOrigin sp) sp]
+
+-- | Instantiate the method that sequences a do statement and equate it with the expected type.
+inferDoMethod :: Maybe SourceSpan -> Text -> ResolutionAnnotation -> TcType -> TcM (PendingTcAnnotation, [Ct])
+inferDoMethod sp methodName resolution expectedTy = do
+  (methodTy, typeArgs, methodCts) <- inferResolvedSyntaxMethod sp methodName resolution
+  ev <- freshEvVar
+  let methodEq = mkWantedCt (EqPred methodTy expectedTy) ev (OccurrenceOf methodName) sp
+      pending = pendingAnnotation methodTy typeArgs (map ctEvVar methodCts) []
+  pure (pending, methodCts <> [methodEq])
+
+wantedDoEq :: Maybe SourceSpan -> TcType -> TcType -> TcM Ct
+wantedDoEq sp actual expected = do
+  ev <- freshEvVar
+  pure (mkWantedCt (EqPred actual expected) ev (AppOrigin sp) sp)
+
+wantedMonad :: Maybe SourceSpan -> TcType -> TcM Ct
+wantedMonad sp monadTy = do
+  ev <- freshEvVar
+  maybeMonad <- lookupTyCon "Monad"
+  case maybeMonad of
+    Just monadInfo -> pure (mkWantedCt (ClassPred (tciTyCon monadInfo) [monadTy]) ev (AppOrigin sp) sp)
+    Nothing -> abortTc "missing checked type constructor for Monad"
+
+compStmtSpan :: CompStmt -> Maybe SourceSpan
+compStmtSpan compStmt =
+  case compStmt of
+    CompAnn ann _ -> fromAnnotation @SourceSpan ann
+    _ -> Nothing
+
+doStmtSpan :: DoStmt body -> Maybe SourceSpan
+doStmtSpan stmt =
+  case stmt of
+    DoAnn ann _ -> fromAnnotation @SourceSpan ann
+    _ -> Nothing
+
+rhsExprSpan :: Rhs Expr -> Maybe SourceSpan
+rhsExprSpan rhs =
+  case rhs of
+    UnguardedRhs anns expr _ -> exprSpan expr <|> sourceSpanFromAnns anns
+    GuardedRhss anns _ _ -> sourceSpanFromAnns anns
+
+exprSpan :: Expr -> Maybe SourceSpan
+exprSpan expr =
+  case expr of
+    EAnn ann inner ->
+      fromAnnotation @SourceSpan ann <|> exprSpan inner
+    _ -> Nothing
+
+nameToText :: Name -> Text
+nameToText n = case nameQualifier n of
+  Nothing -> nameText n
+  Just q -> q <> "." <> nameText n
+
+stringTyCon :: TcM TcType
+stringTyCon = do
+  listTyCon <- resolvedListTyCon
+  elementType <- charType
+  pure (TcTyCon listTyCon [elementType])
