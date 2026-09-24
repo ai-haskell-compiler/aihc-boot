@@ -29,7 +29,6 @@ human input. The README shows them all, updated daily by
 
 | | Milestone | Measured as | Done when |
 | --- | --- | --- | --- |
-| M0 | **Foundations**: nix flake, CI, progress tracker, README | Required files present | 4/4 |
 | M1 | **Vendor**: every `keep`/`simplify` package from `boot.toml` is in `vendor/` | Vendored packages / planned packages | All vendored and `cabal build` with GHC works on the vendored tree |
 | M2 | **Prune**: the closure is as small as we plan to make it | `drop` packages no longer referenced + `replace` packages written + unaccounted dependencies triaged | Every `drop` gone, every `replace` written, no unaccounted dependencies |
 | M3 | **Parse**: aihc-boot parses the vendored tree | Modules parsed / total modules | 100% |

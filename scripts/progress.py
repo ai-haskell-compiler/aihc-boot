@@ -269,15 +269,7 @@ def measure(run_compiler: bool = True) -> dict:
     prune_done = sum(drop_done(p) if p.plan == "drop" else p.vendored for p in prune)
     total_modules = sum(len(p.modules) for p in vendored)
 
-    foundations = [
-        (ROOT / "flake.nix").exists(),
-        (ROOT / "flake.lock").exists(),
-        (ROOT / ".github" / "workflows" / "progress.yml").exists(),
-        START in README.read_text() if README.exists() else False,
-    ]
-
     milestones = [
-        Milestone("M0", "Foundations", sum(foundations), len(foundations)),
         Milestone("M1", "Vendor", sum(p.vendored for p in fetch), len(fetch)),
         Milestone("M2", "Prune", prune_done, len(prune) + len(unaccounted)),
         *(
@@ -362,7 +354,7 @@ def render(result: dict, last_change: str | None) -> str:
 
 # --- History ----------------------------------------------------------------
 
-HISTORY_FIELDS = ["date"] + [f"M{i}" for i in range(8)] + ["modules", "lines", "upstream_lines"]
+HISTORY_FIELDS = ["date"] + [f"M{i}" for i in range(1, 8)] + ["modules", "lines", "upstream_lines"]
 
 
 def history_row(result: dict, date: str) -> dict:

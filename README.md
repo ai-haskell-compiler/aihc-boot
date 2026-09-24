@@ -19,7 +19,6 @@ _Last change in progress: 2026-09-24. Boot compiler: not built yet (M3–M7 read
 
 | Milestone | Done | Progress |
 | --- | ---: | --- |
-| **M0** Foundations | 4/4 | `██████████` 100.0% |
 | **M1** Vendor | 0/19 | `░░░░░░░░░░` 0.0% |
 | **M2** Prune | 0/20 | `░░░░░░░░░░` 0.0% |
 | **M3** Parse | — | `░░░░░░░░░░` 0.0% |
@@ -77,7 +76,6 @@ _Last change in progress: 2026-09-24. Boot compiler: not built yet (M3–M7 read
 
 | | Milestone |
 | --- | --- |
-| M0 | Foundations: nix flake, CI, progress tracker |
 | M1 | Vendor aihc and its dependencies into `vendor/` |
 | M2 | Prune the closure: drop and replace dependencies |
 | M3 | Parse every vendored module |
