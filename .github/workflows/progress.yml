@@ -34,5 +34,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md progress/
-          git commit -m "Update progress ($(date -u +%F))"
+          git commit -m "chore(progress): update progress"
           git push
