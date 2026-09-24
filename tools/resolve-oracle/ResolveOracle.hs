@@ -11,7 +11,7 @@
 --
 -- > package NAME          start a package; later lines belong to it
 -- > language EDITION      the cabal default-language (default: GHC2021)
--- > extension NAME        one cabal default-extension (repeat)
+-- > extension NAME        one cabal default-extension, NoNAME to disable (repeat)
 -- > module PATH           one source file (repeat)
 -- > builtin MODULE        a module whose exports are in scope everywhere
 -- > report NAME           print the records of this package (default: all)
@@ -40,7 +40,7 @@ import Aihc.Parser.Syntax
     SourceSpan,
     effectiveExtensions,
     fromAnnotation,
-    parseExtensionName,
+    parseExtensionSettingName,
     parseLanguageEdition,
     pattern SourceSpan,
   )
@@ -78,7 +78,7 @@ import System.IO (hPutStrLn, hSetEncoding, stderr, stdout, utf8)
 data ManifestPackage = ManifestPackage
   { manifestName :: Text,
     manifestEdition :: LanguageEdition,
-    manifestExtensions :: [Extension],
+    manifestExtensions :: [ExtensionSetting],
     manifestModules :: [FilePath]
   }
 
@@ -120,7 +120,7 @@ readManifest input = finish <$> foldl' step (Right (Manifest [] [] [])) (zip [1 
                 Just edition -> withPackage (\p -> p {manifestEdition = edition})
                 Nothing -> Left (at "unknown language edition " <> T.unpack name)
             ["extension", name] ->
-              case parseExtensionName name of
+              case parseExtensionSettingName name of
                 Just ext -> withPackage (\p -> p {manifestExtensions = manifestExtensions p <> [ext]})
                 Nothing -> Left (at "unknown extension " <> T.unpack name)
             ("module" : rest) | not (null rest) -> withPackage (\p -> p {manifestModules = T.unpack (T.unwords rest) : manifestModules p})
@@ -169,7 +169,7 @@ parseFile pkg package path = do
   let source = TE.decodeUtf8With lenientDecode bytes
       header = readModuleHeaderPragmas source
       edition = fromMaybe (manifestEdition package) (headerLanguageEdition header)
-      settings = map EnableExtension (manifestExtensions package) <> headerExtensionSettings header
+      settings = manifestExtensions package <> headerExtensionSettings header
       extensions = effectiveExtensions edition settings
       config = defaultConfig {parserSourceName = path, parserExtensions = extensions}
       (errors, modu) = parseModule config source

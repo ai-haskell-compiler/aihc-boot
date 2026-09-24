@@ -35,8 +35,10 @@ main :: IO ()
 main = do
   args <- getArgs
   let (flags, files) = partition ("-X" `isPrefixOf`) args
-  extensions <- mapM extension flags
-  let config = defaultConfig {parserExtensions = extensions}
+  settings <- mapM extension flags
+  let config = defaultConfig {parserExtensions = foldl' apply [] settings}
+      apply exts (EnableExtension ext) = exts ++ [ext]
+      apply exts (DisableExtension ext) = filter (/= ext) exts
   case files of
     [file] -> do
       tree <- parseFile config file
@@ -53,9 +55,10 @@ main = do
       hPutStrLn stderr "usage: aihc-parse [-XExtension ...] FILE [FILE2]"
       exitFailure
 
-extension :: String -> IO Extension
+-- | A @-X@ flag. @-XNoName@ turns an extension off.
+extension :: String -> IO ExtensionSetting
 extension flag =
-  case parseExtensionName (T.pack (drop 2 flag)) of
+  case parseExtensionSettingName (T.pack (drop 2 flag)) of
     Just ext -> pure ext
     Nothing -> do
       hPutStrLn stderr ("aihc-parse: unknown extension " ++ flag)

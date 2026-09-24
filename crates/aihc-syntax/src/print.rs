@@ -418,7 +418,7 @@ impl Printer {
                 ..
             } => {
                 self.push(if *newtype { "newtype " } else { "data " });
-                self.push(name);
+                self.push(&var_name(&QName::unqualified(name.clone())));
                 self.binders(vars);
                 if let Some(k) = kind {
                     self.push(" :: ");

@@ -149,7 +149,7 @@ impl Parser {
     }
 
     /// One or more atypes applied to each other.
-    fn optype(&mut self) -> Result<Type> {
+    pub(super) fn optype(&mut self) -> Result<Type> {
         let mut ty = self.atype()?;
         loop {
             if self.at(&TokenKind::ReservedOp(ReservedOp::At)) {

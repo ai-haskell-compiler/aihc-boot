@@ -104,7 +104,7 @@ used_by = ["aihc", "aihc-package-plan"]
 [packages.base]
 plan = "replace"
 used_by = ["*"]
-note = "aihc-boot's own minimal base/Prelude, grown on demand."
+note = "aihc-boot's own minimal base/Prelude, grown on demand. Has what deepseq uses."
 
 [packages.ghc-prim]
 plan = "replace"
