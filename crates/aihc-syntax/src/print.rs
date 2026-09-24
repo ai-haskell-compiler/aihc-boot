@@ -2,8 +2,8 @@
 //!
 //! The output uses explicit braces and semicolons, so the layout rule
 //! plays no part in reading it back. The printer keeps every token of the
-//! tree in source order, which is what the round trip through GHC checks:
-//! GHC's tree for the printed source must equal GHC's tree for the
+//! tree in source order, which is what the round trip through aihc-parser
+//! checks: its tree for the printed source must equal its tree for the
 //! original.
 
 // The printer is one `match` arm per tree node. Long functions are the

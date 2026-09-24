@@ -199,7 +199,7 @@ impl Parser {
             return self.unexpected("`}`");
         }
         // The block's own virtual `;` tokens further on are stale too:
-        // GHC's lexer stops producing them once the block is closed.
+        // a layout-aware lexer stops producing them once the block is closed.
         let mut depth = 0u32;
         let mut i = self.idx;
         while i < self.tokens.len() {

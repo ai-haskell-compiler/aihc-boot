@@ -15,7 +15,7 @@
 //! ```
 //!
 //! Type operators stay in source order. The tree keeps every parenthesis,
-//! so the printer reproduces the tokens and GHC sees the same fixity.
+//! so the printer reproduces the tokens and a reader sees the same fixity.
 
 use super::{Parser, Result};
 use crate::ast::{BangType, QName, TyVarBind, Type};

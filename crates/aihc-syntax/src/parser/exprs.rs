@@ -13,8 +13,8 @@
 //!
 //! Operator chains stay flat and in source order. Fixity resolution is a
 //! later pass, after imports are known. The printer reproduces the chain
-//! as written, so GHC resolves the printed source the same way as the
-//! original.
+//! as written, so any parser resolves the printed source the same way as
+//! the original.
 
 use super::decls::DeclContext;
 use super::{Parser, Result};

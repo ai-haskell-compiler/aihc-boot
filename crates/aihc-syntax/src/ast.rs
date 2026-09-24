@@ -141,8 +141,7 @@ pub enum Type {
 }
 
 /// A literal in a type, a pattern or an expression. Every variant keeps
-/// the source spelling, because GHC prints literals from the source and
-/// the round trip compares the printed forms.
+/// the source spelling, so the printer reproduces the literal exactly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Literal {
     Integer(String),
@@ -168,8 +167,8 @@ pub struct BangType {
 
 // --- Declarations ----------------------------------------------------------
 
-/// Where the `qualified` keyword of an import stands. GHC prints the two
-/// positions differently, so the tree keeps the distinction.
+/// Where the `qualified` keyword of an import stands. The tree keeps the
+/// distinction so the printer reproduces the source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Qualified {
     No,
