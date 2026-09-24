@@ -18,10 +18,10 @@
 //! so the printer reproduces the tokens and GHC sees the same fixity.
 
 use super::{Parser, Result};
-use crate::ast::{BangType, Literal, QName, TyVarBind, Type};
+use crate::ast::{BangType, QName, TyVarBind, Type};
 use crate::token::{Keyword, ReservedOp, TokenKind};
 
-impl Parser<'_> {
+impl Parser {
     /// A type with optional `forall` and context.
     pub(super) fn ty(&mut self) -> Result<Type> {
         if self.at_varid("forall") {
@@ -83,8 +83,9 @@ impl Parser<'_> {
     pub(super) fn varid(&mut self) -> Result<String> {
         match self.kind() {
             TokenKind::VarId { qual, name } if qual.is_empty() => {
+                let name = name.clone();
                 self.bump();
-                Ok(name.clone())
+                Ok(name)
             }
             _ => self.unexpected("a variable"),
         }
@@ -174,9 +175,9 @@ impl Parser<'_> {
             | TokenKind::Special('(' | '[')
             | TokenKind::Tick
             | TokenKind::Keyword(Keyword::Underscore)
-            | TokenKind::String(_)
+            | TokenKind::String { .. }
             | TokenKind::Integer(_)
-            | TokenKind::Char(_) => true,
+            | TokenKind::Char { .. } => true,
             _ => false,
         }
     }
@@ -209,20 +210,8 @@ impl Parser<'_> {
                 }
                 Ok(Type::Promoted(Box::new(self.atype()?)))
             }
-            TokenKind::String(s) => {
-                let lit = Literal::String(s.clone());
-                self.bump();
-                Ok(Type::Lit(lit))
-            }
-            TokenKind::Integer(s) => {
-                let lit = Literal::Integer(s.clone());
-                self.bump();
-                Ok(Type::Lit(lit))
-            }
-            TokenKind::Char(c) => {
-                let lit = Literal::Char(*c);
-                self.bump();
-                Ok(Type::Lit(lit))
+            TokenKind::String { .. } | TokenKind::Integer(_) | TokenKind::Char { .. } => {
+                Ok(Type::Lit(self.literal()?))
             }
             TokenKind::Special('[') => {
                 let mut items = self.bracketed_types()?;
@@ -318,19 +307,10 @@ impl Parser<'_> {
         Some(name)
     }
 
-    /// A constructor argument or field type: optional `UNPACK` pragma,
-    /// optional `!` or `~`, then an atype (or a full type after `::`, which
-    /// the caller chooses with `full`).
+    /// A constructor argument or field type: optional `!` or `~`, then an
+    /// atype (or a full type after `::`, which the caller chooses with
+    /// `full`).
     pub(super) fn bang_type(&mut self, full: bool) -> Result<BangType> {
-        let mut unpack = None;
-        if let TokenKind::Pragma(text) = self.kind() {
-            match text.trim() {
-                "UNPACK" => unpack = Some(true),
-                "NOUNPACK" => unpack = Some(false),
-                _ => return self.unexpected("a field type"),
-            }
-            self.bump();
-        }
         let strict = if self.at_varsym("!") {
             self.bump();
             Some(true)
@@ -340,6 +320,6 @@ impl Parser<'_> {
             None
         };
         let ty = if full { self.ty()? } else { self.atype()? };
-        Ok(BangType { unpack, strict, ty })
+        Ok(BangType { strict, ty })
     }
 }

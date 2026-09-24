@@ -1,12 +1,11 @@
 //! Declarations: type signatures, fixity, `data`, `newtype`, `type`,
-//! `class`, `instance` and standalone pragmas.
-//!
-//! Value bindings and pattern synonym definitions need expressions and
-//! patterns, which the parser does not have yet. They are parse errors, so
-//! a module with one of them does not count as parsed.
+//! `class`, `instance`, bindings and pattern synonyms.
 
 use super::{Parser, Result};
-use crate::ast::{Assoc, BangType, ConBody, ConDecl, Decl, DerivStrategy, Deriving, Field, Type};
+use crate::ast::{
+    Assoc, BangType, ConBody, ConDecl, Decl, DerivStrategy, Deriving, Field, Lhs, Pat, PatSynDir,
+    PatSynLhs, Type,
+};
 use crate::token::{Keyword, ReservedOp, TokenKind};
 
 /// Where a declaration appears. Class bodies permit `default` signatures.
@@ -15,39 +14,26 @@ pub(super) enum DeclContext {
     TopLevel,
     Class,
     Instance,
+    /// A `let` or `where` block.
+    Local,
 }
 
-impl Parser<'_> {
+impl Parser {
     /// A `where` block of declarations, which may be empty. The `where`
     /// itself is consumed here.
     fn where_decls(&mut self, ctx: DeclContext) -> Result<Vec<Decl>> {
         if !self.eat_keyword(Keyword::Where) {
             return Ok(Vec::new());
         }
-        let explicit = self.open_block()?;
-        let mut decls = Vec::new();
-        self.semis();
-        while !self.at_close_block(explicit) {
-            decls.push(self.decl(ctx)?);
-            if !self.semis() {
-                break;
-            }
-        }
-        self.close_block(explicit)?;
-        Ok(decls)
+        self.block(|p| p.decl(ctx))
     }
 
     pub(super) fn decl(&mut self, ctx: DeclContext) -> Result<Decl> {
         let pos = self.pos();
         match self.kind() {
-            TokenKind::Pragma(text) => {
-                let text = text.trim().to_string();
-                self.bump();
-                Ok(Decl::Pragma { pos, text })
-            }
             TokenKind::Keyword(Keyword::Data) => self.data_decl(false),
             TokenKind::Keyword(Keyword::Newtype) => self.data_decl(true),
-            TokenKind::Keyword(Keyword::Type) => self.type_syn(),
+            TokenKind::Keyword(Keyword::Type) => self.type_decl(ctx),
             TokenKind::Keyword(Keyword::Class) => self.class_decl(),
             TokenKind::Keyword(Keyword::Instance) => self.instance_decl(),
             TokenKind::Keyword(Keyword::Infix | Keyword::Infixl | Keyword::Infixr) => self.fixity(),
@@ -69,16 +55,27 @@ impl Parser<'_> {
             TokenKind::Keyword(Keyword::Default) => {
                 self.error("default declarations are not supported yet")
             }
-            _ if self.at_varid("pattern") && self.next_is_conid() => self.pat_syn_sig(),
-            _ => self.sig_or_binding(ctx),
+            _ if ctx == DeclContext::TopLevel
+                && self.at_varid("pattern")
+                && self.pattern_decl_ahead() =>
+            {
+                self.pat_syn()
+            }
+            _ => self.sig_or_binding(),
         }
     }
 
-    fn next_is_conid(&self) -> bool {
-        matches!(
-            self.tokens.get(self.idx + 1).map(|t| &t.kind),
-            Some(TokenKind::ConId { .. })
-        )
+    /// `pattern` starts a pattern synonym when a constructor name, or a
+    /// variable followed by a constructor operator, comes next.
+    fn pattern_decl_ahead(&self) -> bool {
+        match self.tokens.get(self.idx + 1).map(|t| &t.kind) {
+            Some(TokenKind::ConId { .. }) => true,
+            Some(TokenKind::VarId { .. }) => matches!(
+                self.tokens.get(self.idx + 2).map(|t| &t.kind),
+                Some(TokenKind::ConSym { .. } | TokenKind::Special('`'))
+            ),
+            _ => false,
+        }
     }
 
     fn next_is_varid_or_paren(&self) -> bool {
@@ -88,8 +85,8 @@ impl Parser<'_> {
         )
     }
 
-    /// `f, g :: t`, or a value binding, which is an error for now.
-    fn sig_or_binding(&mut self, ctx: DeclContext) -> Result<Decl> {
+    /// `f, g :: t`, or a binding.
+    fn sig_or_binding(&mut self) -> Result<Decl> {
         let pos = self.pos();
         let start = self.idx;
         let mut names = Vec::new();
@@ -105,12 +102,77 @@ impl Parser<'_> {
             break;
         }
         self.idx = start;
-        let what = match ctx {
-            DeclContext::TopLevel => "value bindings",
-            DeclContext::Class => "default method bindings",
-            DeclContext::Instance => "method bindings",
-        };
-        self.error(format!("{what} are not supported yet"))
+        let lhs = self.lhs()?;
+        let rhs = self.rhs(ReservedOp::Equals)?;
+        Ok(Decl::Bind { pos, lhs, rhs })
+    }
+
+    /// The left-hand side of a binding: `f p1 p2`, `(op) p1`, `p1 op p2`
+    /// or a pattern.
+    fn lhs(&mut self) -> Result<Lhs> {
+        let start = self.idx;
+        if let Ok(name) = self.sig_name() {
+            let mut args = Vec::new();
+            while self.at_apat_start() {
+                args.push(self.apat()?);
+            }
+            if self.at_lhs_end() {
+                return Ok(Lhs::Fun { name, args });
+            }
+            self.idx = start;
+        }
+        let mut left: Pat = self.pat()?;
+        if self.eat(&TokenKind::ReservedOp(ReservedOp::DoubleColon)) {
+            // A pattern binding with a signature: `p :: t = e`.
+            let ty = self.ty()?;
+            left = Pat::Sig(Box::new(left), ty);
+        }
+        if let Some((op, len)) = self.var_operator_ahead() {
+            self.idx += len;
+            let right = self.pat()?;
+            return Ok(Lhs::Infix {
+                left,
+                op,
+                right,
+                args: Vec::new(),
+            });
+        }
+        if self.at_lhs_end() {
+            return Ok(Lhs::Pat(left));
+        }
+        self.unexpected("`=` or `|`")
+    }
+
+    fn at_lhs_end(&self) -> bool {
+        matches!(
+            self.kind(),
+            TokenKind::ReservedOp(ReservedOp::Equals | ReservedOp::Bar)
+        )
+    }
+
+    /// A variable operator, not consumed, with its token count: `<+>` or
+    /// `` `f` ``. Constructor operators belong to patterns.
+    fn var_operator_ahead(&self) -> Option<(String, usize)> {
+        match self.kind() {
+            TokenKind::VarSym { qual, name } if qual.is_empty() => Some((name.clone(), 1)),
+            TokenKind::Special('`') => {
+                let Some(TokenKind::VarId { qual, name }) =
+                    self.tokens.get(self.idx + 1).map(|t| &t.kind)
+                else {
+                    return None;
+                };
+                if !qual.is_empty()
+                    || !matches!(
+                        self.tokens.get(self.idx + 2).map(|t| &t.kind),
+                        Some(TokenKind::Special('`'))
+                    )
+                {
+                    return None;
+                }
+                Some((format!("`{name}`"), 3))
+            }
+            _ => None,
+        }
     }
 
     /// A name in a signature: `f` or `(+)`.
@@ -121,31 +183,86 @@ impl Parser<'_> {
         self.varid()
     }
 
-    fn pat_syn_sig(&mut self) -> Result<Decl> {
+    /// `pattern P, Q :: t`, or a pattern synonym definition.
+    fn pat_syn(&mut self) -> Result<Decl> {
         let pos = self.pos();
-        let start = self.idx;
         self.bump();
+        let start = self.idx;
         let mut names = Vec::new();
-        loop {
-            names.push(self.conid()?);
+        while let Ok(name) = self.conid() {
+            names.push(name);
             if !self.eat_special(',') {
                 break;
             }
         }
-        if !self.eat(&TokenKind::ReservedOp(ReservedOp::DoubleColon)) {
-            self.idx = start;
-            return self.error("pattern synonym definitions are not supported yet");
+        if !names.is_empty() && self.eat(&TokenKind::ReservedOp(ReservedOp::DoubleColon)) {
+            let ty = self.ty()?;
+            return Ok(Decl::PatSynSig { pos, names, ty });
         }
-        let ty = self.ty()?;
-        Ok(Decl::PatSynSig { pos, names, ty })
+        self.idx = start;
+        let lhs = if let Ok(name) = self.conid() {
+            if self.eat_special('{') {
+                let mut fields = Vec::new();
+                if !self.at_special('}') {
+                    loop {
+                        fields.push(self.varid()?);
+                        if !self.eat_special(',') {
+                            break;
+                        }
+                    }
+                }
+                self.expect_special('}')?;
+                PatSynLhs::Record { name, fields }
+            } else {
+                let mut args = Vec::new();
+                while let TokenKind::VarId { qual, .. } = self.kind() {
+                    if !qual.is_empty() {
+                        break;
+                    }
+                    args.push(self.varid()?);
+                }
+                PatSynLhs::Prefix { name, args }
+            }
+        } else {
+            let left = self.varid()?;
+            let op = match self.kind() {
+                TokenKind::ConSym { qual, name } if qual.is_empty() => {
+                    let name = name.clone();
+                    self.bump();
+                    name
+                }
+                TokenKind::Special('`') => {
+                    self.bump();
+                    let name = self.conid()?;
+                    self.expect_special('`')?;
+                    format!("`{name}`")
+                }
+                _ => return self.unexpected("a constructor operator"),
+            };
+            let right = self.varid()?;
+            PatSynLhs::Infix { left, op, right }
+        };
+        let (dir, pat) = if self.eat(&TokenKind::ReservedOp(ReservedOp::Equals)) {
+            (PatSynDir::Implicit, self.pat()?)
+        } else {
+            self.expect(&TokenKind::ReservedOp(ReservedOp::LeftArrow), "`=` or `<-`")?;
+            let pat = self.pat()?;
+            if self.eat_keyword(Keyword::Where) {
+                (PatSynDir::Explicit(self.local_decls()?), pat)
+            } else {
+                (PatSynDir::Unidirectional, pat)
+            }
+        };
+        Ok(Decl::PatSyn { pos, lhs, dir, pat })
     }
 
     /// An unqualified constructor name.
     fn conid(&mut self) -> Result<String> {
         match self.kind() {
             TokenKind::ConId { qual, name } if qual.is_empty() => {
+                let name = name.clone();
                 self.bump();
-                Ok(name.clone())
+                Ok(name)
             }
             _ => self.unexpected("a constructor name"),
         }
@@ -304,7 +421,6 @@ impl Parser<'_> {
         self.at_atype_start()
             || self.at_varsym("!")
             || self.at(&TokenKind::ReservedOp(ReservedOp::Tilde))
-            || matches!(self.kind(), TokenKind::Pragma(_))
     }
 
     /// Whether a `=>` follows before the end of this constructor, at
@@ -444,11 +560,34 @@ impl Parser<'_> {
 
     // --- type ---------------------------------------------------------------
 
-    fn type_syn(&mut self) -> Result<Decl> {
+    /// `type T a = t`, `type family F a :: k`, `type instance F Int = t`,
+    /// and the associated forms in class and instance bodies.
+    fn type_decl(&mut self, ctx: DeclContext) -> Result<Decl> {
         let pos = self.pos();
         self.bump();
+        let family = self.eat_varid("family") || ctx == DeclContext::Class;
+        let instance = self.eat_keyword(Keyword::Instance) || ctx == DeclContext::Instance;
+        if instance {
+            let lhs = self.btype()?;
+            self.expect(&TokenKind::ReservedOp(ReservedOp::Equals), "`=`")?;
+            let rhs = self.ty()?;
+            return Ok(Decl::TypeInstance { pos, lhs, rhs });
+        }
         let name = self.conid()?;
         let vars = self.ty_var_binds()?;
+        if family {
+            let kind = if self.eat(&TokenKind::ReservedOp(ReservedOp::DoubleColon)) {
+                Some(self.ty()?)
+            } else {
+                None
+            };
+            return Ok(Decl::TypeFamily {
+                pos,
+                name,
+                vars,
+                kind,
+            });
+        }
         self.expect(&TokenKind::ReservedOp(ReservedOp::Equals), "`=`")?;
         let rhs = self.ty()?;
         Ok(Decl::TypeSyn {
@@ -559,7 +698,7 @@ mod tests {
             panic!()
         };
         assert_eq!(fields[0].names, vec!["f", "g"]);
-        assert_eq!(fields[0].ty.unpack, Some(true));
+        assert_eq!(fields[0].ty.strict, Some(true));
         assert_eq!(deriving.len(), 2);
         assert!(deriving[0].parens && deriving[0].classes.len() == 2);
         assert_eq!(deriving[1].strategy, Some(DerivStrategy::Stock));
@@ -592,9 +731,8 @@ mod tests {
         };
         assert!(ctx.is_some());
         assert_eq!(name, "C");
-        assert_eq!(body.len(), 3);
+        assert_eq!(body.len(), 2);
         assert!(matches!(&body[1], Decl::DefaultSig { name, .. } if name == "m"));
-        assert!(matches!(&body[2], Decl::Pragma { text, .. } if text == "MINIMAL m"));
         assert!(matches!(&d[1], Decl::Instance { body, .. } if body.is_empty()));
         assert!(matches!(
             &d[2],
@@ -622,11 +760,67 @@ mod tests {
     }
 
     #[test]
-    fn bindings_are_errors() {
-        let err = parse("module M where\nf :: Int\nf x = x\n").unwrap_err();
-        assert_eq!(err.pos, Pos { line: 3, col: 1 });
-        assert_eq!(err.message, "value bindings are not supported yet");
-        let err = parse("module M where\npattern P = Just\n").unwrap_err();
-        assert_eq!(err.pos.line, 2);
+    fn bindings() {
+        let d = decls(
+            "f x (Just y) = x\n\
+             (<+>) a b = a\n\
+             x `plus` y = x\n\
+             (a, b) = (1, 2)\n\
+             !z = 3\n\
+             g x\n  | x > 0, Just y <- h x = y\n  | otherwise = 0\n  where h = Just\n",
+        );
+        assert!(
+            matches!(&d[0], Decl::Bind { lhs: Lhs::Fun { name, args }, .. } if name == "f" && args.len() == 2)
+        );
+        assert!(
+            matches!(&d[1], Decl::Bind { lhs: Lhs::Fun { name, args }, .. } if name == "<+>" && args.len() == 2)
+        );
+        assert!(matches!(&d[2], Decl::Bind { lhs: Lhs::Infix { op, .. }, .. } if op == "`plus`"));
+        assert!(matches!(
+            &d[3],
+            Decl::Bind {
+                lhs: Lhs::Pat(Pat::Tuple(_)),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &d[4],
+            Decl::Bind {
+                lhs: Lhs::Pat(Pat::Bang(_)),
+                ..
+            }
+        ));
+        let Decl::Bind { rhs, .. } = &d[5] else {
+            panic!()
+        };
+        let RhsBody::Guarded(guards) = &rhs.body else {
+            panic!()
+        };
+        assert_eq!(guards.len(), 2);
+        assert_eq!(guards[0].guards.len(), 2);
+        assert_eq!(rhs.wheres.len(), 1);
+    }
+
+    #[test]
+    fn pattern_synonyms() {
+        let d = decls(
+            "pattern P x = Just x\n\
+             pattern x :< xs <- (uncons -> Just (x, xs))\n\
+             pattern Q {a, b} <- (a, b) where\n  Q a b = (a, b)\n",
+        );
+        assert!(matches!(
+            &d[0],
+            Decl::PatSyn {
+                lhs: PatSynLhs::Prefix { .. },
+                dir: PatSynDir::Implicit,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&d[1], Decl::PatSyn { lhs: PatSynLhs::Infix { op, .. }, dir: PatSynDir::Unidirectional, pat: Pat::Paren(_), .. } if op == ":<")
+        );
+        assert!(
+            matches!(&d[2], Decl::PatSyn { lhs: PatSynLhs::Record { fields, .. }, dir: PatSynDir::Explicit(ds), .. } if fields.len() == 2 && ds.len() == 1)
+        );
     }
 }

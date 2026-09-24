@@ -43,10 +43,10 @@ pub enum TokenKind {
     Integer(String),
     /// A floating point literal. The text is the source spelling.
     Float(String),
-    /// A character literal, decoded.
-    Char(char),
-    /// A string literal, decoded.
-    String(String),
+    /// A character literal: the decoded value and the source spelling.
+    Char { value: char, raw: String },
+    /// A string literal: the decoded value and the source spelling.
+    String { value: String, raw: String },
 
     /// A reserved word, such as `where`.
     Keyword(Keyword),
@@ -55,8 +55,8 @@ pub enum TokenKind {
     /// A special character: one of `(`, `)`, `,`, `;`, `[`, `]`, `` ` ``, `{` or `}`.
     Special(char),
 
-    /// A pragma, such as `{-# LANGUAGE CPP #-}`. The text excludes the
-    /// `{-#` and `#-}` brackets.
+    /// A `LANGUAGE`, `OPTIONS_GHC` or `SOURCE` pragma. The text excludes
+    /// the `{-#` and `#-}` brackets. The lexer drops every other pragma.
     Pragma(String),
 
     /// A lone `'` that does not start a character literal. `DataKinds`
@@ -240,8 +240,7 @@ impl fmt::Display for TokenKind {
                 }
             }
             TokenKind::Integer(s) | TokenKind::Float(s) => write!(f, "{s}"),
-            TokenKind::Char(c) => write!(f, "{c:?}"),
-            TokenKind::String(s) => write!(f, "{s:?}"),
+            TokenKind::Char { raw, .. } | TokenKind::String { raw, .. } => write!(f, "{raw}"),
             TokenKind::Keyword(k) => write!(f, "{}", k.as_str()),
             TokenKind::ReservedOp(op) => write!(f, "{}", op.as_str()),
             TokenKind::Special(c) => write!(f, "{c}"),

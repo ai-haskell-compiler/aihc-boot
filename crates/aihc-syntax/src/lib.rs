@@ -83,7 +83,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, SyntaxError> {
 
 /// Parse a source file into a module.
 pub fn parse(src: &str) -> Result<ast::Module, SyntaxError> {
-    Ok(parser::parse_module(&tokenize(src)?)?)
+    Ok(parser::parse_module(tokenize(src)?)?)
 }
 
 #[cfg(test)]

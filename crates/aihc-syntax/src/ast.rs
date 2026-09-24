@@ -1,9 +1,9 @@
 //! The syntax tree.
 //!
-//! The tree covers the module header, exports, imports, types and the
-//! declarations that have no expressions. The parser reports an error
-//! for value bindings, so no declaration is ever skipped: a module either
-//! has a complete tree or a parse error.
+//! The tree keeps the source structure, including parentheses and the
+//! order of infix operators, so that a printer reproduces the tokens the
+//! parser saw. It has no pragmas: the lexer drops them, because aihc-boot
+//! ignores optimization hints.
 
 use crate::token::Pos;
 
@@ -142,15 +142,15 @@ pub enum Type {
     Wildcard,
 }
 
-/// A literal in a type or an expression.
+/// A literal in a type, a pattern or an expression. Every variant keeps
+/// the source spelling, because GHC prints literals from the source and
+/// the round trip compares the printed forms.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Literal {
-    /// The source spelling.
     Integer(String),
-    /// The source spelling.
     Float(String),
-    Char(char),
-    String(String),
+    Char { value: char, raw: String },
+    String { value: String, raw: String },
 }
 
 /// A type variable binder: `a` or `(a :: k)`.
@@ -163,9 +163,6 @@ pub struct TyVarBind {
 /// A constructor argument or record field type, with its strictness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BangType {
-    /// `{-# UNPACK #-}` (`Some(true)`) or `{-# NOUNPACK #-}`
-    /// (`Some(false)`).
-    pub unpack: Option<bool>,
     /// `!` (`Some(true)`) or `~` (`Some(false)`).
     pub strict: Option<bool>,
     pub ty: Type,
@@ -226,6 +223,15 @@ pub enum Decl {
         vars: Vec<TyVarBind>,
         rhs: Type,
     },
+    /// `type F a :: k` in a class body, or `type family F a :: k`.
+    TypeFamily {
+        pos: Pos,
+        name: String,
+        vars: Vec<TyVarBind>,
+        kind: Option<Type>,
+    },
+    /// `type F Int = t` in an instance body, or `type instance F Int = t`.
+    TypeInstance { pos: Pos, lhs: Type, rhs: Type },
     /// `class ctx => C a where { ... }`
     Class {
         pos: Pos,
@@ -241,9 +247,16 @@ pub enum Decl {
         head: Type,
         body: Vec<Decl>,
     },
-    /// A pragma that stands as a declaration, such as `{-# INLINE f #-}`.
-    /// The text is kept as is.
-    Pragma { pos: Pos, text: String },
+    /// One clause of a function, or a pattern binding: `f x = e`,
+    /// `x <+> y = e`, `(a, b) = e`.
+    Bind { pos: Pos, lhs: Lhs, rhs: Rhs },
+    /// A pattern synonym definition.
+    PatSyn {
+        pos: Pos,
+        lhs: PatSynLhs,
+        dir: PatSynDir,
+        pat: Pat,
+    },
 }
 
 impl Decl {
@@ -255,9 +268,12 @@ impl Decl {
             | Decl::Fixity { pos, .. }
             | Decl::Data { pos, .. }
             | Decl::TypeSyn { pos, .. }
+            | Decl::TypeFamily { pos, .. }
+            | Decl::TypeInstance { pos, .. }
             | Decl::Class { pos, .. }
             | Decl::Instance { pos, .. }
-            | Decl::Pragma { pos, .. } => *pos,
+            | Decl::Bind { pos, .. }
+            | Decl::PatSyn { pos, .. } => *pos,
         }
     }
 }
@@ -319,4 +335,213 @@ pub enum DerivStrategy {
     Stock,
     Anyclass,
     Newtype,
+}
+
+// --- Bindings --------------------------------------------------------------
+
+/// The left-hand side of a binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Lhs {
+    /// `f p1 p2`
+    Fun { name: String, args: Vec<Pat> },
+    /// `p1 op p2`, and `(p1 op p2) p3 ...` with `args`.
+    Infix {
+        left: Pat,
+        op: String,
+        right: Pat,
+        args: Vec<Pat>,
+    },
+    /// A pattern binding, such as `(a, b)` or `!x`.
+    Pat(Pat),
+}
+
+/// The right-hand side of a binding or a case alternative.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rhs {
+    pub body: RhsBody,
+    /// `where` declarations.
+    pub wheres: Vec<Decl>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RhsBody {
+    /// `= e` (or `-> e` in an alternative)
+    Plain(Expr),
+    /// `| g = e | g = e`
+    Guarded(Vec<GuardedRhs>),
+}
+
+/// One guarded alternative: `| g1, g2 = e`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuardedRhs {
+    pub guards: Vec<Stmt>,
+    pub body: Expr,
+}
+
+/// The left-hand side of a pattern synonym: `P a b`, `a :< b` or
+/// `P {a, b}`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PatSynLhs {
+    Prefix {
+        name: String,
+        args: Vec<String>,
+    },
+    Infix {
+        left: String,
+        op: String,
+        right: String,
+    },
+    Record {
+        name: String,
+        fields: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PatSynDir {
+    /// `pattern P <- p`
+    Unidirectional,
+    /// `pattern P = p`
+    Implicit,
+    /// `pattern P <- p where P = e`
+    Explicit(Vec<Decl>),
+}
+
+// --- Patterns --------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pat {
+    Var(String),
+    Wildcard,
+    /// A literal; `negative` for `-1`.
+    Lit {
+        lit: Literal,
+        negative: bool,
+    },
+    /// `C p1 p2`; a bare constructor has no arguments.
+    Con {
+        name: QName,
+        args: Vec<Pat>,
+    },
+    /// `p1 op p2 op p3`, in source order.
+    Infix {
+        first: Box<Pat>,
+        rest: Vec<(QName, Pat)>,
+    },
+    /// `C { f = p, g }`; `wildcard` for `..`.
+    Record {
+        name: QName,
+        fields: Vec<FieldPat>,
+        wildcard: bool,
+    },
+    Tuple(Vec<Pat>),
+    List(Vec<Pat>),
+    Paren(Box<Pat>),
+    /// `x@p`
+    As(String, Box<Pat>),
+    /// `~p`
+    Lazy(Box<Pat>),
+    /// `!p`
+    Bang(Box<Pat>),
+    /// `(e -> p)`, without the parentheses.
+    View(Box<Expr>, Box<Pat>),
+    /// `p :: t`, without the parentheses.
+    Sig(Box<Pat>, Type),
+    /// `@t` in a constructor pattern (`TypeAbstractions`).
+    TypeArg(Type),
+}
+
+/// A field in a record pattern: `f = p`, or a pun `f`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldPat {
+    pub name: QName,
+    pub pat: Option<Pat>,
+}
+
+// --- Expressions -----------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Expr {
+    Var(QName),
+    Con(QName),
+    Lit(Literal),
+    /// `f x`
+    App(Box<Expr>, Box<Expr>),
+    /// `f @t`
+    TypeApp(Box<Expr>, Type),
+    /// `e1 op e2 op e3`, in source order. Operators keep their spelling;
+    /// the printer adds backquotes to alphanumeric ones.
+    Infix {
+        first: Box<Expr>,
+        rest: Vec<(QName, Expr)>,
+    },
+    /// `-e`
+    Neg(Box<Expr>),
+    /// `\p1 p2 -> e`
+    Lambda(Vec<Pat>, Box<Expr>),
+    /// `\case { alts }`
+    LambdaCase(Vec<Alt>),
+    /// `let decls in e`
+    Let(Vec<Decl>, Box<Expr>),
+    /// `if c then t else e`
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `case e of { alts }`
+    Case(Box<Expr>, Vec<Alt>),
+    /// `do { stmts }`
+    Do(Vec<Stmt>),
+    Tuple(Vec<Expr>),
+    /// `(, e)` or `(e ,)`: a missing component is `None`.
+    TupleSection(Vec<Option<Expr>>),
+    List(Vec<Expr>),
+    /// `[from, then .. to]`
+    ArithSeq {
+        from: Box<Expr>,
+        then: Option<Box<Expr>>,
+        to: Option<Box<Expr>>,
+    },
+    /// `[e | stmts]`
+    ListComp(Box<Expr>, Vec<Stmt>),
+    Paren(Box<Expr>),
+    /// `(e op)`, without the parentheses.
+    LeftSection(Box<Expr>, QName),
+    /// `(op e)`, without the parentheses.
+    RightSection(QName, Box<Expr>),
+    /// `C { f = e, g }`
+    RecordCon {
+        name: QName,
+        fields: Vec<FieldUpdate>,
+        wildcard: bool,
+    },
+    /// `e { f = e }`
+    RecordUpdate(Box<Expr>, Vec<FieldUpdate>),
+    /// `e :: t`
+    Sig(Box<Expr>, Type),
+    /// `_`, a typed hole.
+    Hole,
+}
+
+/// A field in a record construction or update: `f = e`, or a pun `f`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldUpdate {
+    pub name: QName,
+    pub value: Option<Expr>,
+}
+
+/// A case alternative.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Alt {
+    pub pos: Pos,
+    pub pat: Pat,
+    pub rhs: Rhs,
+}
+
+/// A statement in a `do` block, a list comprehension or a guard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Stmt {
+    /// `p <- e`
+    Bind(Pat, Expr),
+    /// `let decls`
+    Let(Vec<Decl>),
+    /// `e`
+    Expr(Expr),
 }

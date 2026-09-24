@@ -121,6 +121,11 @@ M3–M7 read 0.
   reorders shows up as a difference. `ghc-parse` comes from the Nix
   shell; `AIHC_GHC_PARSE` overrides its path. Without it every module
   fails.
+- **Pragmas are ignored.** `INLINE`, `SPECIALIZE`, `UNPACK`, `SCC` and
+  the other optimization hints do not change what a program computes.
+  The lexer drops them, and `ghc-parse` removes them from GHC's tree
+  before the comparison. Only `LANGUAGE`, `OPTIONS_GHC` and `SOURCE`
+  stay, because they change how a module is read.
   Resolving and typechecking a package needs its dependencies, so aihc-boot
   reads `boot.toml`/`vendor/` itself to find them.
 - `aihc-boot run FILE.hs` compiles and runs a single-module program
@@ -145,8 +150,10 @@ The Rust workspace has one crate per stage, plus the binary:
 
 - `crates/aihc-syntax`: lexer, layout rule, syntax tree, parser and
   printer. The parser skips nothing: a construct it does not know is a
-  parse error with a position. The tests include one that prints and
-  re-parses every vendored module the parser accepts.
+  parse error with a position. Operator chains stay flat and in source
+  order; fixity resolution comes after name resolution. The tests
+  include one that prints and re-parses every vendored module the
+  parser accepts.
 - `tools/ghc-parse`: the reference parser, a small program on the GHC
   API. See "Compiler interface" above.
 - `crates/aihc-boot`: the `aihc-boot` binary. It implements the command

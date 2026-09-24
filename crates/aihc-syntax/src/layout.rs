@@ -3,19 +3,13 @@
 //! This is the algorithm `L` from section 10.3 of the Haskell 2010 report,
 //! run as one pass over the token stream. The report leaves one rule to the
 //! parser: an implicit block closes when the next token would otherwise be
-//! a parse error. This pass approximates that rule with three cases that
-//! cover the vendored tree:
+//! a parse error. The parser applies that rule (see `parser`). This pass
+//! applies two cases of it early, because they make the token stream
+//! easier to scan ahead in:
 //!
-//! - `in` closes the block a `let` opened.
 //! - A closing bracket (`)`, `]` or a non-layout `}`) closes every implicit
 //!   block that opened inside the bracket.
-//! - A comma closes an implicit block that opened inside a bracket, as in
-//!   a list comprehension `let` or a record field. Blocks that `of` opened
-//!   stay open, because guards in case alternatives contain commas.
 //! - `where` at the column of a block closes the block.
-//!
-//! The parser can move the rule to where it belongs later; the interface
-//! here is one token stream, so the change is local.
 
 use crate::token::{Keyword, Pos, ReservedOp, Token, TokenKind};
 use std::fmt;
@@ -40,8 +34,6 @@ enum Context {
     /// An implicit block with the column of its first token.
     Implicit {
         col: u32,
-        /// The keyword that opened the block.
-        opener: Keyword,
         /// The bracket depth when the block opened.
         depth: u32,
     },
@@ -83,25 +75,13 @@ pub fn layout(tokens: Vec<Token>) -> Result<Vec<Token>, LayoutError> {
         let is_eof = tok.kind == TokenKind::Eof;
 
         if let TokenKind::Pragma(_) = tok.kind {
-            // A pragma takes part in the `<n>` rule only: `{-# INLINE f #-}`
-            // on its own line is a declaration of the block. It never opens
-            // a block and never closes one through the parse-error rule.
-            if pos.line > prev_line {
-                if let Some(Context::Implicit { col: m, .. }) = stack.last() {
-                    if col == *m {
-                        out.push(Token {
-                            kind: TokenKind::VSemi,
-                            pos,
-                        });
-                    }
-                }
-                prev_line = pos.line;
-            }
+            // The pragmas that reach this pass (`LANGUAGE`, `OPTIONS_GHC`,
+            // `SOURCE`) are comments for the layout rule.
             out.push(tok);
             continue;
         }
 
-        if let Some(keyword) = pending_open.take() {
+        if pending_open.take().is_some() {
             if tok.kind == TokenKind::Special('{') {
                 stack.push(Context::Explicit { depth });
                 out.push(tok);
@@ -112,11 +92,7 @@ pub fn layout(tokens: Vec<Token>) -> Result<Vec<Token>, LayoutError> {
             let enclosing = enclosing_col(&stack);
             let n = if is_eof { 0 } else { col };
             if n > enclosing || (stack.is_empty() && n > 0) {
-                stack.push(Context::Implicit {
-                    col: n,
-                    opener: keyword,
-                    depth,
-                });
+                stack.push(Context::Implicit { col: n, depth });
                 out.push(Token {
                     kind: TokenKind::VOpen,
                     pos,
@@ -194,35 +170,17 @@ pub fn layout(tokens: Vec<Token>) -> Result<Vec<Token>, LayoutError> {
 
         // The parse-error rule, approximated.
         match tok.kind {
-            TokenKind::Keyword(Keyword::In) => {
-                if let Some(Context::Implicit {
-                    opener: Keyword::Let,
-                    ..
-                }) = stack.last()
-                {
-                    stack.pop();
-                    out.push(Token {
-                        kind: TokenKind::VClose,
-                        pos,
-                    });
-                }
-            }
             TokenKind::Special(')' | ']') => {
-                close_implicit_at(&mut stack, &mut out, depth, pos, false);
+                close_implicit_at(&mut stack, &mut out, depth, pos);
                 depth = depth.saturating_sub(1);
             }
             TokenKind::Special('}') => {
-                close_implicit_at(&mut stack, &mut out, depth, pos, false);
+                close_implicit_at(&mut stack, &mut out, depth, pos);
                 match stack.last() {
                     Some(Context::Explicit { depth: d }) if *d == depth => {
                         stack.pop();
                     }
                     _ => depth = depth.saturating_sub(1),
-                }
-            }
-            TokenKind::Special(',') => {
-                if depth > 0 {
-                    close_implicit_at(&mut stack, &mut out, depth, pos, true);
                 }
             }
             TokenKind::Special('(' | '[' | '{') => depth += 1,
@@ -255,20 +213,10 @@ fn enclosing_col(stack: &[Context]) -> u32 {
     }
 }
 
-/// Close the implicit blocks that opened at bracket depth `depth`. With
-/// `skip_of`, stop at a block that `of` opened.
-fn close_implicit_at(
-    stack: &mut Vec<Context>,
-    out: &mut Vec<Token>,
-    depth: u32,
-    pos: Pos,
-    skip_of: bool,
-) {
-    while let Some(Context::Implicit {
-        depth: d, opener, ..
-    }) = stack.last()
-    {
-        if *d != depth || (skip_of && *opener == Keyword::Of) {
+/// Close the implicit blocks that opened at bracket depth `depth`.
+fn close_implicit_at(stack: &mut Vec<Context>, out: &mut Vec<Token>, depth: u32, pos: Pos) {
+    while let Some(Context::Implicit { depth: d, .. }) = stack.last() {
+        if *d != depth {
             break;
         }
         stack.pop();
@@ -340,8 +288,9 @@ mod tests {
     }
 
     #[test]
-    fn let_in_on_one_line() {
-        assert_eq!(render("x = let a = 1 in a"), "{ x = let { a = 1 } in a }");
+    fn let_in() {
+        // `in` on the same line: the parser closes the block.
+        assert_eq!(render("x = let a = 1 in a"), "{ x = let { a = 1 in a } }");
         assert_eq!(
             render("x = let a = 1\n        b = 2\n    in a"),
             "{ x = let { a = 1 ; b = 2 } in a }"
@@ -354,13 +303,10 @@ mod tests {
             render("x = (do a) + [case y of A -> 1]"),
             "{ x = ( do { a } ) + [ case y of { A -> 1 } ] }"
         );
+        // Commas are the parser's job.
         assert_eq!(
             render("xs = [y | x <- zs, let y = x, y > 0]"),
-            "{ xs = [ y | x <- zs , let { y = x } , y > 0 ] }"
-        );
-        assert_eq!(
-            render("r = Rec { a = do b, c = 1 }"),
-            "{ r = Rec { a = do { b } , c = 1 } }"
+            "{ xs = [ y | x <- zs , let { y = x , y > 0 } ] }"
         );
         assert_eq!(
             render("f = g where { h = Rec { a = 1 } }"),
@@ -411,18 +357,6 @@ mod tests {
         assert_eq!(
             render("f = do\n  if a\n  then b\n  else c\n"),
             "{ f = do { if a ; then b ; else c } }"
-        );
-    }
-
-    #[test]
-    fn pragmas_are_block_items() {
-        assert_eq!(
-            render("f = 1\n{-# INLINE f #-}\ng = 2\n"),
-            "{ f = 1 ; {-# INLINE f #-} ; g = 2 }"
-        );
-        assert_eq!(
-            render("data T = T {-# UNPACK #-} !Int\n"),
-            "{ data T = T {-# UNPACK #-} ! Int }"
         );
     }
 

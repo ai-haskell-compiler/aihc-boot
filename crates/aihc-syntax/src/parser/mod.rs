@@ -2,8 +2,17 @@
 //!
 //! This is a recursive descent parser over the token stream of
 //! [`crate::tokenize`]. This module handles the module header, the export
-//! list and the imports. The `types` and `decls` modules handle the rest.
-//! Nothing is skipped: a construct the parser does not know is an error.
+//! list, the imports and the shared machinery. The `types`, `decls`,
+//! `pats` and `exprs` modules handle the rest. Nothing is skipped: a
+//! construct the parser does not know is an error.
+//!
+//! The parser completes the layout rule. The `layout` pass inserts the
+//! virtual braces and semicolons that indentation determines. The report
+//! adds one rule it cannot apply: an implicit block also closes where the
+//! next token would be a parse error. [`Parser::block`] applies it: when
+//! an item of an implicit block ends and the next token is neither `;`
+//! nor the block's `}`, or when an item cannot start, the block closes
+//! there and its virtual `}` is removed from the stream.
 
 use crate::ast::{Export, Import, ImportItem, Module, QName, Qualified, Subs};
 use crate::token::{Keyword, Pos, ReservedOp, Token, TokenKind};
@@ -29,27 +38,27 @@ type Result<T> = std::result::Result<T, ParseError>;
 /// Parse a module from its tokens. The tokens must come from
 /// [`crate::tokenize`], so the layout rule has run and the stream ends
 /// with `Eof`.
-pub fn parse_module(tokens: &[Token]) -> Result<Module> {
+pub fn parse_module(tokens: Vec<Token>) -> Result<Module> {
     let mut p = Parser { tokens, idx: 0 };
     let module = p.module()?;
     p.expect_eof()?;
     Ok(module)
 }
 
-pub(crate) struct Parser<'a> {
-    tokens: &'a [Token],
+pub(crate) struct Parser {
+    tokens: Vec<Token>,
     idx: usize,
 }
 
-impl<'a> Parser<'a> {
+impl Parser {
     // --- Token access -----------------------------------------------------
 
-    fn peek(&self) -> &'a Token {
+    fn peek(&self) -> &Token {
         // The stream ends with `Eof`, and the parser never moves past it.
         &self.tokens[self.idx.min(self.tokens.len() - 1)]
     }
 
-    fn kind(&self) -> &'a TokenKind {
+    fn kind(&self) -> &TokenKind {
         &self.peek().kind
     }
 
@@ -57,12 +66,12 @@ impl<'a> Parser<'a> {
         self.peek().pos
     }
 
-    fn bump(&mut self) -> &'a Token {
-        let tok = self.peek();
-        if tok.kind != TokenKind::Eof {
+    fn bump(&mut self) -> &Token {
+        let idx = self.idx.min(self.tokens.len() - 1);
+        if self.tokens[idx].kind != TokenKind::Eof {
             self.idx += 1;
         }
-        tok
+        &self.tokens[idx]
     }
 
     fn at(&self, kind: &TokenKind) -> bool {
@@ -130,9 +139,10 @@ impl<'a> Parser<'a> {
         self.error(format!("expected {expected}, found `{}`", self.kind()))
     }
 
-    fn expect(&mut self, kind: &TokenKind, what: &str) -> Result<&'a Token> {
+    fn expect(&mut self, kind: &TokenKind, what: &str) -> Result<()> {
         if self.at(kind) {
-            Ok(self.bump())
+            self.bump();
+            Ok(())
         } else {
             self.unexpected(what)
         }
@@ -177,13 +187,65 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Close a block. An implicit block closes at any token: that is the
+    /// parse-error rule of the layout algorithm. Its virtual `}` further
+    /// on in the stream goes away, so the enclosing blocks stay balanced.
     fn close_block(&mut self, explicit: bool) -> Result<()> {
         if self.at_close_block(explicit) {
             self.bump();
-            Ok(())
-        } else {
-            self.unexpected("`}`")
+            return Ok(());
         }
+        if explicit {
+            return self.unexpected("`}`");
+        }
+        // The block's own virtual `;` tokens further on are stale too:
+        // GHC's lexer stops producing them once the block is closed.
+        let mut depth = 0u32;
+        let mut i = self.idx;
+        while i < self.tokens.len() {
+            match self.tokens[i].kind {
+                TokenKind::VOpen => depth += 1,
+                TokenKind::VSemi if depth == 0 => {
+                    self.tokens.remove(i);
+                    continue;
+                }
+                TokenKind::VClose if depth == 0 => {
+                    self.tokens.remove(i);
+                    return Ok(());
+                }
+                TokenKind::VClose => depth -= 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        self.unexpected("`}`")
+    }
+
+    /// A block of items: `{` or a virtual `{`, items separated by `;`,
+    /// then `}`. See the module documentation for how an implicit block
+    /// closes early.
+    fn block<T>(&mut self, mut item: impl FnMut(&mut Self) -> Result<T>) -> Result<Vec<T>> {
+        let explicit = self.open_block()?;
+        let mut items = Vec::new();
+        self.semis();
+        while !self.at_close_block(explicit) {
+            let start = self.idx;
+            let pos = self.pos();
+            match item(self) {
+                Ok(x) => items.push(x),
+                // An item that cannot start closes an implicit block.
+                Err(e) if !explicit && e.pos == pos => {
+                    self.idx = start;
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+            if !self.semis() {
+                break;
+            }
+        }
+        self.close_block(explicit)?;
+        Ok(items)
     }
 
     /// One or more `;` or virtual `;`. Returns whether any was found.
@@ -200,12 +262,13 @@ impl<'a> Parser<'a> {
     fn modid(&mut self) -> Result<String> {
         match self.kind() {
             TokenKind::ConId { qual, name } => {
-                self.bump();
-                Ok(if qual.is_empty() {
+                let modid = if qual.is_empty() {
                     name.clone()
                 } else {
                     format!("{qual}.{name}")
-                })
+                };
+                self.bump();
+                Ok(modid)
             }
             _ => self.unexpected("a module name"),
         }
@@ -258,23 +321,17 @@ impl<'a> Parser<'a> {
         } else {
             ("Main".to_string(), None)
         };
-        let explicit = self.open_block()?;
-        self.semis();
         let mut imports = Vec::new();
-        while self.at_keyword(Keyword::Import) {
-            imports.push(self.import()?);
-            if !self.semis() {
-                break;
+        let mut decls_started = false;
+        let decls = self.block(|p| {
+            if p.at_keyword(Keyword::Import) && !decls_started {
+                imports.push(p.import()?);
+                return Ok(None);
             }
-        }
-        let mut decls = Vec::new();
-        while !self.at_close_block(explicit) {
-            decls.push(self.decl(decls::DeclContext::TopLevel)?);
-            if !self.semis() {
-                break;
-            }
-        }
-        self.close_block(explicit)?;
+            decls_started = true;
+            p.decl(decls::DeclContext::TopLevel).map(Some)
+        })?;
+        let decls = decls.into_iter().flatten().collect();
         Ok(Module {
             pos,
             pragmas,
@@ -352,11 +409,12 @@ impl<'a> Parser<'a> {
         }
         match self.kind() {
             TokenKind::VarId { qual, name } | TokenKind::ConId { qual, name } => {
-                self.bump();
-                Ok(QName {
+                let qname = QName {
                     qual: qual.clone(),
                     name: name.clone(),
-                })
+                };
+                self.bump();
+                Ok(qname)
             }
             _ => self.unexpected("a name"),
         }
@@ -405,8 +463,8 @@ impl<'a> Parser<'a> {
             Qualified::No
         };
         let package = match self.kind() {
-            TokenKind::String(s) => {
-                let s = s.clone();
+            TokenKind::String { value, .. } => {
+                let s = value.clone();
                 self.bump();
                 Some(s)
             }
@@ -489,6 +547,8 @@ impl<'a> Parser<'a> {
 }
 
 mod decls;
+mod exprs;
+mod pats;
 mod types;
 
 #[cfg(test)]
@@ -497,7 +557,7 @@ mod tests {
     use crate::tokenize;
 
     fn parse(src: &str) -> Module {
-        parse_module(&tokenize(src).unwrap()).unwrap()
+        parse_module(tokenize(src).unwrap()).unwrap()
     }
 
     fn import(module: &str) -> Import {
@@ -676,7 +736,7 @@ mod tests {
             ])
         );
         // `type` alone is a keyword, so this is an error.
-        assert!(parse_module(&tokenize("import B (type)").unwrap()).is_err());
+        assert!(parse_module(tokenize("import B (type)").unwrap()).is_err());
     }
 
     #[test]
@@ -688,10 +748,10 @@ mod tests {
 
     #[test]
     fn errors_have_positions() {
-        let err = parse_module(&tokenize("module where").unwrap()).unwrap_err();
+        let err = parse_module(tokenize("module where").unwrap()).unwrap_err();
         assert_eq!(err.pos, Pos { line: 1, col: 8 });
         let err =
-            parse_module(&tokenize("module M where\nimport A hiding\nx = 1").unwrap()).unwrap_err();
+            parse_module(tokenize("module M where\nimport A hiding\nx = 1").unwrap()).unwrap_err();
         assert_eq!(err.pos.line, 3);
     }
 }

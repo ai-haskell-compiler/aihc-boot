@@ -2,9 +2,11 @@
 //!
 //! The lexer follows chapter 2 of the Haskell 2010 report, plus the
 //! extensions the vendored tree uses: `MagicHash` names and the `'` tick
-//! of `DataKinds`. Comments go away. Pragmas stay, because the parser
-//! reads `LANGUAGE` pragmas. The lexer does not apply the layout rule; see
-//! the `layout` module for that.
+//! of `DataKinds`. Comments go away. So do pragmas, except the three that
+//! change how a module is read: `LANGUAGE`, `OPTIONS_GHC` and `SOURCE`.
+//! Every other pragma is an optimization hint, and aihc-boot ignores
+//! those. The lexer does not apply the layout rule; see the `layout`
+//! module for that.
 
 use crate::token::{Keyword, Pos, ReservedOp, Token, TokenKind};
 use std::fmt;
@@ -183,7 +185,9 @@ impl Lexer {
                     }
                 }
                 Some('{') if self.starts_with("{-#") => {
-                    return self.pragma().map(Some);
+                    if let Some(pragma) = self.pragma()? {
+                        return Ok(Some(pragma));
+                    }
                 }
                 Some('{') if self.starts_with("{-") => {
                     self.block_comment()?;
@@ -221,7 +225,9 @@ impl Lexer {
         Ok(())
     }
 
-    fn pragma(&mut self) -> Result<Token, LexError> {
+    /// A pragma. Returns a token for the pragmas that matter and `None`
+    /// for the ones the compiler ignores.
+    fn pragma(&mut self) -> Result<Option<Token>, LexError> {
         let start = self.pos;
         self.bump_n(3);
         let mut text = String::new();
@@ -235,10 +241,14 @@ impl Lexer {
                 None => return self.error(start, "unterminated pragma"),
             }
         }
-        Ok(Token {
+        let keep = matches!(
+            text.split_whitespace().next(),
+            Some("LANGUAGE" | "OPTIONS_GHC" | "OPTIONS" | "SOURCE")
+        );
+        Ok(keep.then_some(Token {
             kind: TokenKind::Pragma(text),
             pos: start,
-        })
+        }))
     }
 
     fn next_token(&mut self) -> Result<Token, LexError> {
@@ -463,7 +473,8 @@ impl Lexer {
         if let Some(c) = c {
             if self.peek() == Some('\'') {
                 self.bump();
-                return Ok(TokenKind::Char(c));
+                let raw = self.chars[save.0..self.idx].iter().collect();
+                return Ok(TokenKind::Char { value: c, raw });
             }
         }
         (self.idx, self.pos) = save;
@@ -473,12 +484,16 @@ impl Lexer {
 
     fn string(&mut self) -> Result<TokenKind, LexError> {
         let start = self.pos;
+        let start_idx = self.idx;
         self.bump();
         let mut s = String::new();
         loop {
             match self.bump() {
                 None | Some('\n') => return self.error(start, "unterminated string literal"),
-                Some('"') => return Ok(TokenKind::String(s)),
+                Some('"') => {
+                    let raw = self.chars[start_idx..self.idx].iter().collect();
+                    return Ok(TokenKind::String { value: s, raw });
+                }
                 Some('\\') => match self.peek() {
                     Some(c) if c.is_whitespace() => {
                         // A string gap: `\` whitespace `\`.
@@ -636,6 +651,20 @@ mod tests {
         }
     }
 
+    fn chr(value: char, raw: &str) -> TokenKind {
+        TokenKind::Char {
+            value,
+            raw: raw.into(),
+        }
+    }
+
+    fn string(value: &str, raw: &str) -> TokenKind {
+        TokenKind::String {
+            value: value.into(),
+            raw: raw.into(),
+        }
+    }
+
     fn sym(name: &str) -> TokenKind {
         TokenKind::VarSym {
             qual: String::new(),
@@ -719,7 +748,7 @@ mod tests {
             vec![var("x"), var("y")]
         );
         assert_eq!(
-            kinds("{-# LANGUAGE CPP #-} x"),
+            kinds("{-# LANGUAGE CPP #-} x {-# INLINE x #-}"),
             vec![TokenKind::Pragma(" LANGUAGE CPP ".into()), var("x")]
         );
     }
@@ -752,25 +781,25 @@ mod tests {
         assert_eq!(
             kinds(r"'a' '\n' '\'' '\\' '\x41' '\65' '\NUL' '\^A'"),
             vec![
-                TokenKind::Char('a'),
-                TokenKind::Char('\n'),
-                TokenKind::Char('\''),
-                TokenKind::Char('\\'),
-                TokenKind::Char('A'),
-                TokenKind::Char('A'),
-                TokenKind::Char('\0'),
-                TokenKind::Char('\x01'),
+                chr('a', "'a'"),
+                chr('\n', r"'\n'"),
+                chr('\'', r"'\''"),
+                chr('\\', r"'\\'"),
+                chr('A', r"'\x41'"),
+                chr('A', r"'\65'"),
+                chr('\0', r"'\NUL'"),
+                chr('\x01', r"'\^A'"),
             ]
         );
         assert_eq!(
             kinds(r#""a\tb\"c" "\SOH" "\SO\&H" "ab\   \cd" "\1234\&5" "\DC1\DEL""#),
             vec![
-                TokenKind::String("a\tb\"c".into()),
-                TokenKind::String("\x01".into()),
-                TokenKind::String("\x0eH".into()),
-                TokenKind::String("abcd".into()),
-                TokenKind::String("\u{4d2}5".into()),
-                TokenKind::String("\x11\x7f".into()),
+                string("a\tb\"c", r#""a\tb\"c""#),
+                string("\x01", r#""\SOH""#),
+                string("\x0eH", r#""\SO\&H""#),
+                string("abcd", r#""ab\   \cd""#),
+                string("\u{4d2}5", r#""\1234\&5""#),
+                string("\x11\x7f", r#""\DC1\DEL""#),
             ]
         );
     }
