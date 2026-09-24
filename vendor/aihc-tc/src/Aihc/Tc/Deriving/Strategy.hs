@@ -1,0 +1,155 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | Select and validate the effective mechanism for a deriving request.
+-- Keeping extension-sensitive policy here makes a checked deriving plan
+-- independent of source defaults and prevents System FC from choosing a
+-- Haskell-level strategy.
+module Aihc.Tc.Deriving.Strategy
+  ( checkDerivingStrategy,
+    defaultStockFallback,
+    isAutomaticTypeableClass,
+    isGeneratedStockClass,
+  )
+where
+
+import Aihc.Parser.Syntax
+  ( DerivingStrategy (..),
+    Extension (..),
+    SourceSpan,
+  )
+import Aihc.Tc.Annotations (TcDerivingStrategy (..))
+import Aihc.Tc.Deriving.References (DerivingReferences (..), stockClassLocationMatches)
+import Aihc.Tc.Deriving.StockClass (NewtypeDefaulting (..), newtypeDefaultingOf, stockClassRequirement)
+import Aihc.Tc.Env (TyConFlavor (..))
+import Aihc.Tc.Error (TcErrorKind (..))
+import Aihc.Tc.Kind (TvKindEnv, checkSurfaceType)
+import Aihc.Tc.Monad (TcM, emitError, emitWarning, getDerivingReferences)
+import Aihc.Tc.Types (TcType)
+import Control.Monad (unless, when)
+import Data.Maybe (isNothing)
+import Data.Text (Text)
+import Data.Text qualified as T
+
+checkDerivingStrategy :: [Extension] -> TyConFlavor -> Text -> Maybe (Text, Text) -> TvKindEnv -> TcType -> Maybe SourceSpan -> Maybe DerivingStrategy -> TcM TcDerivingStrategy
+checkDerivingStrategy extensions targetFlavor className classOrigin tvEnv targetKind sourceSpan strategy = do
+  references <- getDerivingReferences
+  let isStock = isStockClass references className classOrigin
+  case strategy of
+    Nothing -> selectDefaultDerivingStrategy extensions targetFlavor className isStock sourceSpan
+    Just DerivingStock -> do
+      checkStockDeriving extensions className isStock sourceSpan
+      pure TcDerivingStock
+    Just DerivingAnyclass -> do
+      requireDerivingExtension extensions DeriveAnyClass "anyclass deriving" sourceSpan
+      pure TcDerivingAnyclass
+    Just DerivingNewtype -> do
+      requireDerivingExtension extensions GeneralizedNewtypeDeriving "newtype deriving" sourceSpan
+      unless (targetFlavor == NewtypeTyCon) $
+        emitError sourceSpan (OtherError "newtype deriving requires a newtype instance target")
+      pure TcDerivingNewtype
+    Just (DerivingVia viaType) -> do
+      requireDerivingExtension extensions DerivingViaExtension "via deriving" sourceSpan
+      TcDerivingVia <$> checkSurfaceType tvEnv viaType targetKind
+
+-- | Whether a deriving request names the automatic @Typeable@ class. The
+-- solver builds @Typeable@ evidence from the type constructor itself, so a
+-- clause that lists it derives nothing; GHC has ignored it since 7.10. The
+-- class is also kind-polymorphic, so checking a plan for it would demand a
+-- target of kind @k@ and reject every ordinary datatype.
+isAutomaticTypeableClass :: Text -> Maybe (Text, Text) -> TcM Bool
+isAutomaticTypeableClass className origin
+  | className /= "Typeable" = pure False
+  | otherwise = do
+      references <- getDerivingReferences
+      pure (isStockClass references className origin)
+
+-- | These default strategies can use stock when newtype derivation fails.
+defaultStockFallback :: Text -> Maybe (Text, Text) -> Maybe DerivingStrategy -> TcDerivingStrategy -> TcM Bool
+defaultStockFallback className origin requested selected = do
+  references <- getDerivingReferences
+  pure
+    ( isNothing requested
+        && selected == TcDerivingNewtype
+        && isStockClass references className origin
+        && newtypeDefaultingOf className == NewtypeWithGnd
+    )
+
+selectDefaultDerivingStrategy :: [Extension] -> TyConFlavor -> Text -> Bool -> Maybe SourceSpan -> TcM TcDerivingStrategy
+selectDefaultDerivingStrategy extensions targetFlavor className isStock sourceSpan
+  | isStock, targetFlavor == NewtypeTyCon, defaulting == NewtypeAlways = pure TcDerivingNewtype
+  | isStock, targetFlavor == NewtypeTyCon, defaulting == NewtypeWithGnd, GeneralizedNewtypeDeriving `elem` extensions = pure TcDerivingNewtype
+  | otherwise = case (isStock, stockClassRequirement className) of
+      (True, Just requiredExtension)
+        | maybe True (`elem` extensions) requiredExtension -> pure TcDerivingStock
+      _
+        | DeriveAnyClass `elem` extensions -> do
+            when (targetFlavor == NewtypeTyCon && GeneralizedNewtypeDeriving `elem` extensions) $
+              emitWarning sourceSpan (OtherError (derivingDefaultsWarning className))
+            pure TcDerivingAnyclass
+        | targetFlavor == NewtypeTyCon,
+          GeneralizedNewtypeDeriving `elem` extensions ->
+            pure TcDerivingNewtype
+        | otherwise -> do
+            emitError sourceSpan (OtherError (defaultStrategyError targetFlavor className))
+            pure TcDerivingStock
+  where
+    defaulting = newtypeDefaultingOf className
+
+checkStockDeriving :: [Extension] -> Text -> Bool -> Maybe SourceSpan -> TcM ()
+checkStockDeriving extensions className isStock sourceSpan
+  | not isStock =
+      emitError sourceSpan (OtherError "stock deriving requires a standard class")
+  | otherwise =
+      case stockClassRequirement className of
+        Nothing ->
+          emitError sourceSpan (OtherError ("stock deriving is not available for class " <> T.unpack className))
+        Just Nothing -> pure ()
+        Just (Just extension) ->
+          requireDerivingExtension extensions extension ("stock deriving for " <> T.unpack className) sourceSpan
+
+-- | Whether a class is one that GHC's stock deriving mechanisms know about.
+--
+-- A class the generator writes code for must match the package, the module
+-- and the name that the configuration lists, so a user module that repeats
+-- a core-library module name keeps its own class. A class the generator
+-- only recognizes matches the module and the name, because no code comes
+-- from it.
+isStockClass :: DerivingReferences -> Text -> Maybe (Text, Text) -> Bool
+isStockClass references className origin =
+  isGeneratedStockClass references className origin
+    || case origin of
+      Just (_, moduleName) -> (moduleName, className) `elem` derivingRecognizedClasses references
+      Nothing -> False
+
+-- | Whether a class is one that the generator writes an instance body for.
+-- A location that names a package demands it, so a class of another package
+-- is never stock.
+isGeneratedStockClass :: DerivingReferences -> Text -> Maybe (Text, Text) -> Bool
+isGeneratedStockClass references className origin =
+  case origin of
+    Just classOrigin ->
+      any (\location -> stockClassLocationMatches classOrigin location className) (derivingStockClasses references)
+    Nothing -> False
+
+requireDerivingExtension :: [Extension] -> Extension -> String -> Maybe SourceSpan -> TcM ()
+requireDerivingExtension extensions extension mechanism sourceSpan =
+  unless (extension `elem` extensions) $
+    emitError sourceSpan (OtherError (mechanism <> " requires " <> derivingExtensionName extension))
+
+derivingExtensionName :: Extension -> String
+derivingExtensionName DerivingViaExtension = "DerivingVia"
+derivingExtensionName extension = show extension
+
+derivingDefaultsWarning :: Text -> String
+derivingDefaultsWarning className =
+  "both DeriveAnyClass and GeneralizedNewtypeDeriving are enabled; defaulting to anyclass for "
+    <> T.unpack className
+
+defaultStrategyError :: TyConFlavor -> Text -> String
+defaultStrategyError targetFlavor className =
+  "cannot select a deriving strategy for "
+    <> T.unpack className
+    <> "; enable DeriveAnyClass"
+    <> if targetFlavor == NewtypeTyCon
+      then " or GeneralizedNewtypeDeriving, or use an explicit strategy"
+      else ", or use an explicit strategy"

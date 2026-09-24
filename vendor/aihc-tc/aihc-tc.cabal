@@ -1,0 +1,160 @@
+cabal-version: 3.8
+name: aihc-tc
+version: 0.1.0.0
+build-type: Simple
+license: Unlicense
+license-file: LICENSE
+author: David Himmelstrup
+maintainer: lemmih@gmail.com
+category: Development
+synopsis: OutsideIn(X) type checker for parsed Haskell modules
+
+flag fuzz
+  description: Build the developer-only Hedgehog property registry
+  default: False
+  manual: True
+
+library
+  exposed-modules:
+    Aihc.Tc
+    Aihc.Tc.Annotations
+    Aihc.Tc.Constraint
+    Aihc.Tc.Deriving.References
+    Aihc.Tc.Deriving.StockClass
+    Aihc.Tc.Env
+    Aihc.Tc.Error
+    Aihc.Tc.Evidence
+    Aihc.Tc.Generate.Bind
+    Aihc.Tc.Generate.Pattern
+    Aihc.Tc.Interface
+    Aihc.Tc.Kind
+    Aihc.Tc.Match
+    Aihc.Tc.Monad
+    Aihc.Tc.Share
+    Aihc.Tc.TypeLitFamily
+    Aihc.Tc.TypeScheme
+    Aihc.Tc.Types
+    Aihc.Tc.Wiring
+    Aihc.Tc.Zonk
+
+  other-modules:
+    Aihc.Tc.Deriving
+    Aihc.Tc.Deriving.Cast
+    Aihc.Tc.Deriving.Coerce
+    Aihc.Tc.Deriving.Context
+    Aihc.Tc.Deriving.Functorial
+    Aihc.Tc.Deriving.Generate
+    Aihc.Tc.Deriving.Strategy
+    Aihc.Tc.Diagnostics
+    Aihc.Tc.Finalize
+    Aihc.Tc.FunDep
+    Aihc.Tc.Generalize
+    Aihc.Tc.Generate.Decl
+    Aihc.Tc.Generate.Expr
+    Aihc.Tc.Generate.PatternBranch
+    Aihc.Tc.Generate.Record
+    Aihc.Tc.Instantiate
+    Aihc.Tc.QuickLook
+    Aihc.Tc.Solve
+    Aihc.Tc.Solve.Canonicalize
+    Aihc.Tc.Solve.Coercible
+    Aihc.Tc.Solve.Congruence
+    Aihc.Tc.Solve.Decompose
+    Aihc.Tc.Solve.Defaulting
+    Aihc.Tc.Solve.Dict
+    Aihc.Tc.Solve.Equality
+    Aihc.Tc.Solve.Family
+    Aihc.Tc.Solve.FunDep
+    Aihc.Tc.Solve.InertSet
+    Aihc.Tc.Solve.Injective
+    Aihc.Tc.Solve.Worklist
+    Aihc.Tc.Tidy
+    Aihc.Tc.Unify
+
+  hs-source-dirs: src
+  build-depends:
+    aihc-parser,
+    aihc-resolve,
+    base >=4.16 && <5,
+    containers,
+    deepseq,
+    text >=1.2,
+    transformers,
+
+  ghc-options: -Wall
+  default-language: GHC2021
+
+library fuzz
+  if !flag(fuzz)
+    buildable: False
+  visibility: public
+  hs-source-dirs:
+    fuzz
+    prim-wiring
+    test
+
+  exposed-modules:
+    Aihc.Tc.Fuzz
+
+  other-modules:
+    Aihc.Prim.Wiring
+    Test.Tc.Properties
+
+  build-depends:
+    aihc-parser,
+    aihc-resolve,
+    aihc-tc,
+    base >=4.16 && <5,
+    containers,
+    hedgehog,
+    tasty,
+    tasty-hedgehog,
+    text >=1.2,
+
+  ghc-options: -Wall
+  default-language: GHC2021
+
+test-suite spec
+  type: exitcode-stdio-1.0
+  hs-source-dirs:
+    test
+    common
+    prim-wiring
+
+  main-is: Spec.hs
+  other-modules:
+    Aihc.Prim.Wiring
+    TcAnnotatedGolden
+    TcAnnotatedRender
+    Test.Tc.Interface
+    Test.Tc.Properties
+    Test.Tc.StockClass
+    Test.Tc.Suite
+    Test.Tc.Traverse
+
+  build-depends:
+    aeson,
+    aihc-parser,
+    aihc-resolve,
+    aihc-tc,
+    aihc-testing,
+    base >=4.16 && <5,
+    bytestring,
+    containers,
+    directory,
+    filepath,
+    hedgehog,
+    prettyprinter,
+    tasty,
+    tasty-hedgehog,
+    tasty-hunit,
+    text,
+    yaml,
+
+  ghc-options:
+    -Wall
+    -threaded
+    -rtsopts
+    "-with-rtsopts=-N -M10G"
+
+  default-language: GHC2021

@@ -1,0 +1,56 @@
+{
+  "aihc": {
+    "source": "git",
+    "url": "https://github.com/ai-haskell-compiler/aihc",
+    "rev": "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05",
+    "subdir": "bin/aihc",
+    "upstream_modules": 94,
+    "upstream_lines": 46705,
+    "vendored_at": "2026-09-24"
+  },
+  "aihc-cpp": {
+    "source": "git",
+    "url": "https://github.com/ai-haskell-compiler/aihc-cpp",
+    "rev": "ea9c5fb1532cd4c3e8a3b39304372226b7f7dcaa",
+    "subdir": ".",
+    "upstream_modules": 6,
+    "upstream_lines": 2376,
+    "vendored_at": "2026-09-24"
+  },
+  "aihc-package-plan": {
+    "source": "git",
+    "url": "https://github.com/ai-haskell-compiler/aihc",
+    "rev": "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05",
+    "subdir": "tooling/aihc-package-plan",
+    "upstream_modules": 5,
+    "upstream_lines": 2025,
+    "vendored_at": "2026-09-24"
+  },
+  "aihc-parser": {
+    "source": "git",
+    "url": "https://github.com/ai-haskell-compiler/aihc-parser",
+    "rev": "46420da73d505555b46c03c00bd7fe44cb72e331",
+    "subdir": ".",
+    "upstream_modules": 28,
+    "upstream_lines": 17315,
+    "vendored_at": "2026-09-24"
+  },
+  "aihc-resolve": {
+    "source": "git",
+    "url": "https://github.com/ai-haskell-compiler/aihc",
+    "rev": "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05",
+    "subdir": "components/aihc-resolve",
+    "upstream_modules": 8,
+    "upstream_lines": 4092,
+    "vendored_at": "2026-09-24"
+  },
+  "aihc-tc": {
+    "source": "git",
+    "url": "https://github.com/ai-haskell-compiler/aihc",
+    "rev": "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05",
+    "subdir": "components/aihc-tc",
+    "upstream_modules": 54,
+    "upstream_lines": 22234,
+    "vendored_at": "2026-09-24"
+  }
+}

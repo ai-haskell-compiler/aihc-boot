@@ -8,7 +8,8 @@
 Hackage packages use `version` from boot.toml, or the latest preferred
 version if unset. Git packages use `url`, `rev` and optional `subdir`.
 Test, benchmark and example directories are removed: aihc-boot only has to
-compile libraries and executables. The fetched version and the upstream size
+compile libraries and executables. If the package has an `include` list in
+boot.toml, only the paths that match its globs stay. The fetched version and the upstream size
 (after that pruning) are recorded in vendor/lock.json, which progress.py uses
 as the baseline for "lines (upstream → now)".
 """
@@ -71,10 +72,20 @@ def vendor_git(name: str, spec: dict, dest: Path) -> dict:
     return {"source": "git", "url": url, "rev": rev, "subdir": spec.get("subdir", ".")}
 
 
-def prune(dest: Path) -> None:
+def prune(dest: Path, include: list[str] | None) -> None:
     for path in sorted(dest.rglob("*"), reverse=True):
         if path.is_dir() and path.name in PRUNE_DIRS:
             shutil.rmtree(path)
+    if include is None:
+        return
+    keep = {p for pattern in include for p in dest.glob(pattern)}
+    if not keep:
+        raise SystemExit(f"{dest.name}: no path matches the include list")
+    for path in sorted(dest.rglob("*"), reverse=True):
+        if path.is_file() and not any(a in keep for a in (path, *path.parents)):
+            path.unlink()
+        elif path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
 
 
 def vendor(name: str, spec: dict, force: bool) -> dict:
@@ -90,7 +101,7 @@ def vendor(name: str, spec: dict, force: bool) -> dict:
         entry = vendor_git(name, spec, dest)
     else:
         raise SystemExit(f"{name}: plan '{spec['plan']}' has no upstream source to fetch")
-    prune(dest)
+    prune(dest, spec.get("include"))
     files = haskell_files(dest)
     entry["upstream_modules"] = len(files)
     entry["upstream_lines"] = count_lines(files)

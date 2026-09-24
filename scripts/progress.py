@@ -38,7 +38,7 @@ START = "<!-- progress:start -->"
 END = "<!-- progress:end -->"
 
 STAGES = ["parse", "resolve", "typecheck"]
-HS_SUFFIXES = {".hs", ".lhs", ".hsc"}
+HS_SUFFIXES = {".hs", ".lhs", ".hsc", ".hs-boot"}
 # Stanzas whose build-depends aihc-boot has to satisfy.
 BUILD_STANZAS = {"library", "executable", "common", "foreign-library"}
 
@@ -67,8 +67,13 @@ def count_lines(files: list[Path]) -> int:
     return total
 
 
-def cabal_build_depends(pkg_dir: Path) -> set[str]:
-    """Package names in build-depends of the stanzas aihc-boot must build."""
+def cabal_build_depends(pkg_dir: Path, stanzas: list[str] | None = None) -> set[str]:
+    """Package names in build-depends of the stanzas aihc-boot must build.
+
+    `stanzas` limits the result to the named stanzas (for example
+    "library" or "executable aihc"). Common stanzas always count.
+    """
+    wanted = {" ".join(s.lower().split()) for s in stanzas} if stanzas else None
     deps: set[str] = set()
     for cabal in pkg_dir.glob("*.cabal"):
         in_stanza = True  # top-level fields before any stanza
@@ -79,7 +84,9 @@ def cabal_build_depends(pkg_dir: Path) -> set[str]:
                 continue
             indent = len(line) - len(line.lstrip())
             if indent == 0:
-                in_stanza = line.split()[0].lower() in BUILD_STANZAS
+                header = " ".join(line.lower().split())
+                kind = header.split()[0]
+                in_stanza = kind in BUILD_STANZAS and (wanted is None or kind == "common" or header in wanted)
                 field_indent = None
                 continue
             if field_indent is not None and indent > field_indent:
@@ -224,7 +231,7 @@ def measure(run_compiler: bool = True) -> dict:
             pkg.modules = [f.as_posix() for f in files]
             pkg.lines = count_lines(files)
             pkg.upstream_lines = lock.get(name, {}).get("upstream_lines")
-            pkg.deps = cabal_build_depends(pkg_dir)
+            pkg.deps = cabal_build_depends(pkg_dir, spec.get("stanzas"))
         packages.append(pkg)
 
     by_name = {p.name: p for p in packages}

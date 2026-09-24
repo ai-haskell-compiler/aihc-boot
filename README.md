@@ -19,11 +19,11 @@ _Last change in progress: 2026-09-24. Boot compiler: not built yet (M3–M7 read
 
 | Milestone | Done | Progress |
 | --- | ---: | --- |
-| **M1** Vendor | 0/19 | `░░░░░░░░░░` 0.0% |
+| **M1** Vendor | 6/19 | `███░░░░░░░` 31.6% |
 | **M2** Prune | 0/20 | `░░░░░░░░░░` 0.0% |
-| **M3** Parse | — | `░░░░░░░░░░` 0.0% |
-| **M4** Resolve | — | `░░░░░░░░░░` 0.0% |
-| **M5** Typecheck | — | `░░░░░░░░░░` 0.0% |
+| **M3** Parse | 0/195 | `░░░░░░░░░░` 0.0% |
+| **M4** Resolve | 0/195 | `░░░░░░░░░░` 0.0% |
+| **M5** Typecheck | 0/195 | `░░░░░░░░░░` 0.0% |
 | **M6** Eval | — | `░░░░░░░░░░` 0.0% |
 | **M7** Stage 1 | — | `░░░░░░░░░░` 0.0% |
 
@@ -31,13 +31,13 @@ _Last change in progress: 2026-09-24. Boot compiler: not built yet (M3–M7 read
 
 | Package | Plan | Status | Modules | Lines (upstream → now) | Parse | Resolve | Typecheck | Eval |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| aihc | keep | not vendored |  |  |  |  |  | — |
-| aihc-resolve | keep | not vendored |  |  |  |  |  | — |
-| aihc-tc | keep | not vendored |  |  |  |  |  | — |
-| aihc-package-plan | keep | not vendored |  |  |  |  |  | — |
+| aihc | keep | vendored | 94 | 46705 → 46705 | 0/94 | 0/94 | 0/94 | — |
+| aihc-resolve | keep | vendored | 8 | 4092 → 4092 | 0/8 | 0/8 | 0/8 | — |
+| aihc-tc | keep | vendored | 54 | 22234 → 22234 | 0/54 | 0/54 | 0/54 | — |
+| aihc-package-plan | keep | vendored | 5 | 2025 → 2025 | 0/5 | 0/5 | 0/5 | — |
 | aihc-hackage | simplify | not vendored |  |  |  |  |  | — |
-| aihc-parser | keep | not vendored |  |  |  |  |  | — |
-| aihc-cpp | keep | not vendored |  |  |  |  |  | — |
+| aihc-parser | keep | vendored | 28 | 17315 → 17315 | 0/28 | 0/28 | 0/28 | — |
+| aihc-cpp | keep | vendored | 6 | 2376 → 2376 | 0/6 | 0/6 | 0/6 | — |
 | base | replace | not vendored |  |  |  |  |  | — |
 | ghc-prim | replace | not vendored |  |  |  |  |  | — |
 | containers | simplify | not vendored |  |  |  |  |  | — |

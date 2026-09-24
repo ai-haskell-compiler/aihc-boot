@@ -1,0 +1,182 @@
+-- | The identities of the type constructors and terms that the type checker
+-- knows by name rather than from source.
+--
+-- Source syntax such as @(a, b)@ or @(# a, b #)@ names no module, so the
+-- type checker cannot resolve it. Neither can it resolve the types it
+-- reaches for on its own: the @Bool@ of a guard, the @Char@ of a character
+-- literal, the list of a comprehension. The compiler that embeds the type
+-- checker says where each of those lives through a 'TcWiring' table in its
+-- configuration, the same way 'Aihc.Tc.Deriving.References' says where the
+-- names of generated deriving code live.
+--
+-- The tuple tables are functions of the arity because a tuple family is
+-- infinite and its members need not share one naming scheme: the aihc core
+-- libraries call the boxed ones @Unit@, @Solo@, @Tuple2@, and so on.
+module Aihc.Tc.Wiring
+  ( TcWiring (..),
+    BuiltinDataCon (..),
+    mkTcKinds,
+    tupleTyCon,
+    tupleDataCon,
+    builtinDataCon,
+  )
+where
+
+import Aihc.Parser.Syntax (TupleFlavor (..))
+import Aihc.Resolve (PackageId)
+import Aihc.Tc.Types (TcKinds (..), TyCon)
+import Data.Set (Set)
+import Data.Text (Text)
+
+-- | The type constructors of the built-in syntactic forms, and the names
+-- the type checker mentions on its own.
+data TcWiring = TcWiring
+  { -- | The boxed tuple type of each arity, such as @Tuple2@ for @(a, b)@.
+    tcWiringBoxedTupleTyCon :: Int -> TyCon,
+    -- | The boxed tuple data constructor of each arity. It is the same
+    -- name in the term namespace, and it is what a promoted tuple such as
+    -- @'(a, b)@ denotes.
+    tcWiringBoxedTupleDataCon :: Int -> TyCon,
+    -- | The unboxed tuple type of each arity, for @(# a, b #)@.
+    tcWiringUnboxedTupleTyCon :: Int -> TyCon,
+    -- | The unboxed tuple data constructor of each arity.
+    tcWiringUnboxedTupleDataCon :: Int -> TyCon,
+    -- | The unboxed sum type of each arity, for @(# a | b #)@.
+    tcWiringUnboxedSumTyCon :: Int -> TyCon,
+    -- | The unboxed sum data constructor of one alternative (1-based) and
+    -- arity, such as @(# | _ #)@ for the second of two.
+    tcWiringUnboxedSumDataCon :: Int -> Int -> TyCon,
+    -- | The list type constructor, for @[a]@ and list comprehensions.
+    tcWiringListTyCon :: TyCon,
+    -- | The source declaration that defines the list type, such as
+    -- @GHC.Types.List@. The type checker gives that declaration the
+    -- identity of 'tcWiringListTyCon' instead of the one its head spells.
+    tcWiringListDeclaration :: TyCon,
+    -- | The empty-list data constructor, which a promoted @'[]@ also
+    -- denotes.
+    tcWiringNilDataCon :: TyCon,
+    -- | The list cons data constructor, which a promoted @'(:)@ also
+    -- denotes.
+    tcWiringConsDataCon :: TyCon,
+    -- | The function arrow, for @(->)@ used as a constructor.
+    tcWiringArrowTyCon :: TyCon,
+    -- | The kind of ordinary types, which @*@ and a bare @Type@ denote.
+    tcWiringTypeTyCon :: TyCon,
+    -- | The kind of constraints, which a bare @Constraint@ denotes.
+    tcWiringConstraintTyCon :: TyCon,
+    -- | The empty constraint tuple, which @()@ denotes at kind
+    -- @Constraint@ rather than at kind @Type@.
+    tcWiringConstraintTupleTyCon :: TyCon,
+    -- | The type of a guard and of an @if@ condition.
+    tcWiringBoolTyCon :: TyCon,
+    -- | The type of a character literal, and the kind of a type-level
+    -- character literal.
+    tcWiringCharTyCon :: TyCon,
+    -- | The kind of a type-level natural literal. GHC gives @3@ the kind
+    -- @GHC.Num.Natural.Natural@ -- the data type itself, which is both a
+    -- runtime type and the kind of the literals -- and @Nat@ is a synonym
+    -- for it. The type constructor is declared outside the primitive
+    -- package, as it is in GHC, where it is wired in from @ghc-bignum@.
+    tcWiringNaturalTyCon :: TyCon,
+    -- | The kind of a type-level string literal, @GHC.Types.Symbol@.
+    tcWiringSymbolTyCon :: TyCon,
+    -- | The nominal equality constraint @~@.
+    tcWiringEqualityTyCon :: TyCon,
+    -- | The representational equality class @Coercible@.
+    tcWiringCoercibleTyCon :: TyCon,
+    -- | The constraint constructor of one implicit parameter, such as
+    -- @?x :: Int@. Each parameter name gets its own constructor.
+    tcWiringImplicitParamTyCon :: Text -> TyCon,
+    -- | An unlifted primitive type of one name, such as @Int#@. A foreign
+    -- declaration marshals through these.
+    tcWiringPrimitiveTyCon :: Text -> TyCon,
+    -- | The canonical package, module, and term name of each primitive.
+    tcWiringPrimitiveTerm :: Text -> (PackageId, Text, Text),
+    -- | These primitives permit declarations only at their canonical identities.
+    tcWiringRestrictedPrimitiveTerms :: Set (PackageId, Text, Text),
+    -- | A constructor of the kind vocabulary of one name and arity, such
+    -- as @TYPE@ or @RuntimeRep@. The type checker builds kinds of its own
+    -- and needs them to be the same types as the ones it reads back from
+    -- an interface, so it asks where they are declared rather than
+    -- assuming.
+    tcWiringKindTyCon :: Text -> Int -> TyCon,
+    -- | A promoted constructor of the kind vocabulary of one name and
+    -- arity, such as @BoxedRep@, @Lifted@ or @IntRep@.
+    tcWiringKindDataCon :: Text -> Int -> TyCon,
+    -- | The modules whose type families the solver computes itself: the
+    -- comparison of each sort of literal and the arithmetic on naturals.
+    -- A family of one of those names declared anywhere else is an
+    -- ordinary family. Like the classes below these need no package.
+    tcWiringTypeLitFamilyModules :: [Text],
+    -- | The custom-type-error family, as a module name and a family name.
+    -- A wanted whose head is this family is reported as the message its
+    -- argument spells rather than as an unsolved constraint. Like the
+    -- classes below it needs no package: a wrong match can only change a
+    -- diagnostic, and naming one would tie the compiler to a library.
+    tcWiringTypeErrorFamily :: (Text, Text),
+    -- | The constructors of @ErrorMessage@, in the order @Text@,
+    -- @ShowType@, @:<>:@ and @:$$:@, so that a message can be rendered.
+    tcWiringErrorMessageCons :: (Text, Text, Text, Text),
+    -- | The Template Haskell @Lift@ class, as a module name and a class
+    -- name. Its parameters take implicit kind parameters.
+    tcWiringLiftClass :: (Text, Text)
+  }
+
+-- | The tables are functions, so a wiring shows as its name alone. The
+-- type checker environment derives 'Show' for diagnostics.
+instance Show TcWiring where
+  show _ = "TcWiring"
+
+-- | The kind vocabulary that the type checker builds its own kinds from.
+mkTcKinds :: TcWiring -> TcKinds
+mkTcKinds wiring =
+  TcKinds
+    { kindsTyCon = tcWiringKindTyCon wiring,
+      kindsDataCon = tcWiringKindDataCon wiring,
+      kindsEqualityTyCon = tcWiringEqualityTyCon wiring,
+      kindsArrowTyCon = tcWiringArrowTyCon wiring,
+      kindsListTyCon = tcWiringListTyCon wiring,
+      kindsListDeclaration = tcWiringListDeclaration wiring,
+      kindsNilDataCon = tcWiringNilDataCon wiring,
+      kindsConsDataCon = tcWiringConsDataCon wiring,
+      kindsNaturalTyCon = tcWiringNaturalTyCon wiring,
+      kindsSymbolTyCon = tcWiringSymbolTyCon wiring,
+      kindsCharTyCon = tcWiringCharTyCon wiring
+    }
+
+-- | The tuple type constructor of one flavor and arity.
+tupleTyCon :: TcWiring -> TupleFlavor -> Int -> TyCon
+tupleTyCon wiring flavor =
+  case flavor of
+    Boxed -> tcWiringBoxedTupleTyCon wiring
+    Unboxed -> tcWiringUnboxedTupleTyCon wiring
+
+-- | The tuple data constructor of one flavor and arity.
+tupleDataCon :: TcWiring -> TupleFlavor -> Int -> TyCon
+tupleDataCon wiring flavor =
+  case flavor of
+    Boxed -> tcWiringBoxedTupleDataCon wiring
+    Unboxed -> tcWiringUnboxedTupleDataCon wiring
+
+-- | A data constructor that built-in syntax denotes. The syntax names no
+-- module and spells no identifier, so the type checker describes the
+-- constructor by its shape and asks the wiring for its identity.
+data BuiltinDataCon
+  = -- | @(,)@, @()@ or @(# , #)@, by flavor and arity.
+    BuiltinTupleCon !TupleFlavor !Int
+  | -- | An unboxed sum alternative, by 1-based alternative and arity.
+    BuiltinUnboxedSumCon !Int !Int
+  | -- | @[]@
+    BuiltinNilCon
+  | -- | @(:)@
+    BuiltinConsCon
+  deriving (Eq, Show)
+
+-- | The identity of the data constructor that one built-in form denotes.
+builtinDataCon :: TcWiring -> BuiltinDataCon -> TyCon
+builtinDataCon wiring builtin =
+  case builtin of
+    BuiltinTupleCon flavor arity -> tupleDataCon wiring flavor arity
+    BuiltinUnboxedSumCon alternative arity -> tcWiringUnboxedSumDataCon wiring alternative arity
+    BuiltinNilCon -> tcWiringNilDataCon wiring
+    BuiltinConsCon -> tcWiringConsDataCon wiring
