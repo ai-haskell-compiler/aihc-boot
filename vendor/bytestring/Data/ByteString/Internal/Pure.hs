@@ -17,8 +17,6 @@ import Data.Word
 import Foreign.Ptr              (plusPtr, nullPtr)
 import Foreign.Storable         (Storable(..))
 import Control.Exception        (assert)
-import Data.ByteString.Utils.ByteOrder
-import Data.ByteString.Utils.UnalignedAccess
 
 memchr :: Ptr Word8 -> Word8 -> Int -> IO (Ptr Word8)
 memchr !p !target !len
@@ -29,27 +27,14 @@ memchr !p !target !len
         then pure p
         else memchr (p `plusPtr` 1) target (len - 1)
 
+-- | Compare two buffers one byte at a time.
 memcmp :: Ptr Word8 -> Ptr Word8 -> Int -> IO Int
 memcmp !p1 !p2 !len
-  | len >= 8 = do
-      w1 <- unalignedReadU64 p1
-      w2 <- unalignedReadU64 p2
-      let toBigEndian = whenLittleEndian byteSwap64
-      if | w1 == w2
-           -> memcmp (p1 `plusPtr` 8) (p2 `plusPtr` 8) (len - 8)
-         | toBigEndian w1 < toBigEndian w2
-           -> pure (0-1)
-         | otherwise -> pure 1
-  | otherwise = memcmp1 p1 p2 len
-
--- | Like 'memcmp', but definitely scans one byte at a time
-memcmp1 :: Ptr Word8 -> Ptr Word8 -> Int -> IO Int
-memcmp1 !p1 !p2 !len
   | len == 0 = pure 0
   | otherwise = assert (len > 0) $ do
       c1 <- peek p1
       c2 <- peek p2
-      if | c1 == c2 -> memcmp1 (p1 `plusPtr` 1) (p2 `plusPtr` 1) (len - 1)
+      if | c1 == c2 -> memcmp (p1 `plusPtr` 1) (p2 `plusPtr` 1) (len - 1)
          | c1 < c2   -> pure (0-1)
          | otherwise -> pure 1
 

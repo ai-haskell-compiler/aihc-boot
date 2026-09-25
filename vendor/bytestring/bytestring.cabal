@@ -45,7 +45,6 @@ library
     TupleSections
     TypeApplications
     TypeOperators
-    UnboxedTuples
 
   build-depends:   base >= 4.11 && < 5, ghc-prim, deepseq
 
@@ -55,7 +54,6 @@ library
                    Data.ByteString.Internal
                    Data.ByteString.Lazy
                    Data.ByteString.Lazy.Internal
-                   Data.ByteString.Short.Internal
                    Data.ByteString.Builder
                    Data.ByteString.Builder.Prim
                    Data.ByteString.Builder.Internal
@@ -65,8 +63,6 @@ library
                    Data.ByteString.Internal.Type
                    Data.ByteString.ReadInt
                    Data.ByteString.ReadNat
-                   Data.ByteString.Utils.ByteOrder
-                   Data.ByteString.Utils.UnalignedAccess
 
   ghc-options:     -Wall -fwarn-tabs -Wincomplete-uni-patterns
                    -O2
