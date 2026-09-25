@@ -15,15 +15,15 @@ Updated daily by [a scheduled workflow](.github/workflows/progress.yml);
 history in [progress/history.csv](progress/history.csv).
 
 <!-- progress:start -->
-_Last change in progress: 2026-09-24. Boot compiler: built._
+_Last change in progress: 2026-09-25. Boot compiler: built._
 
 | Milestone | Done | Progress |
 | --- | ---: | --- |
-| **M1** Vendor | 6/19 | `███░░░░░░░` 31.6% |
-| **M2** Prune | 0/20 | `░░░░░░░░░░` 0.0% |
-| **M3** Parse | 0/195 | `░░░░░░░░░░` 0.0% |
-| **M4** Resolve | 0/195 | `░░░░░░░░░░` 0.0% |
-| **M5** Typecheck | 0/195 | `░░░░░░░░░░` 0.0% |
+| **M1** Vendor | 11/19 | `██████░░░░` 57.9% |
+| **M2** Prune | 1/20 | `░░░░░░░░░░` 5.0% |
+| **M3** Parse | 232/238 | `██████████` 97.5% |
+| **M4** Resolve | 6/238 | `░░░░░░░░░░` 2.5% |
+| **M5** Typecheck | 0/238 | `░░░░░░░░░░` 0.0% |
 | **M6** Eval | — | `░░░░░░░░░░` 0.0% |
 | **M7** Stage 1 | — | `░░░░░░░░░░` 0.0% |
 
@@ -31,23 +31,23 @@ _Last change in progress: 2026-09-24. Boot compiler: built._
 
 | Package | Plan | Status | Modules | Lines (upstream → now) | Parse | Resolve | Typecheck | Eval |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| aihc | keep | vendored | 94 | 46705 → 46705 | 0/94 | 0/94 | 0/94 | — |
-| aihc-resolve | keep | vendored | 8 | 4092 → 4092 | 0/8 | 0/8 | 0/8 | — |
-| aihc-tc | keep | vendored | 54 | 22234 → 22234 | 0/54 | 0/54 | 0/54 | — |
-| aihc-package-plan | keep | vendored | 5 | 2025 → 2025 | 0/5 | 0/5 | 0/5 | — |
+| aihc | keep | vendored | 94 | 46705 → 46705 | 94/94 | 0/94 | 0/94 | — |
+| aihc-resolve | keep | vendored | 8 | 4106 → 4106 | 8/8 | 0/8 | 0/8 | — |
+| aihc-tc | keep | vendored | 54 | 22234 → 22234 | 54/54 | 0/54 | 0/54 | — |
+| aihc-package-plan | keep | vendored | 5 | 2025 → 2025 | 5/5 | 0/5 | 0/5 | — |
 | aihc-hackage | simplify | not vendored |  |  |  |  |  | — |
-| aihc-parser | keep | vendored | 28 | 17315 → 17315 | 0/28 | 0/28 | 0/28 | — |
-| aihc-cpp | keep | vendored | 6 | 2376 → 2376 | 0/6 | 0/6 | 0/6 | — |
-| base | replace | not vendored |  |  |  |  |  | — |
+| aihc-parser | keep | vendored | 28 | 17315 → 17315 | 28/28 | 0/28 | 0/28 | — |
+| aihc-cpp | keep | vendored | 6 | 2376 → 2376 | 6/6 | 0/6 | 0/6 | — |
+| base | replace | vendored | 5 | 94 | 5/5 | 5/5 | 0/5 | — |
 | ghc-prim | replace | not vendored |  |  |  |  |  | — |
-| containers | simplify | not vendored |  |  |  |  |  | — |
-| text | simplify | not vendored |  |  |  |  |  | — |
-| bytestring | simplify | not vendored |  |  |  |  |  | — |
-| deepseq | simplify | not vendored |  |  |  |  |  | — |
+| containers | simplify | vendored | 6 | 22364 → 614 | 6/6 | 0/6 | 0/6 | — |
+| text | simplify | vendored | 14 | 20301 → 1026 | 13/14 | 0/14 | 0/14 | — |
+| bytestring | simplify | vendored | 15 | 15180 → 2570 | 10/15 | 0/15 | 0/15 | — |
+| deepseq | simplify | vendored | 1 | 936 → 72 | 1/1 | 1/1 | 0/1 | — |
 | transformers | simplify | not vendored |  |  |  |  |  | — |
 | array | simplify | not vendored |  |  |  |  |  | — |
 | binary | simplify | not vendored |  |  |  |  |  | — |
-| filepath | simplify | not vendored |  |  |  |  |  | — |
+| filepath | simplify | vendored | 2 | 3156 → 214 | 2/2 | 0/2 | 0/2 | — |
 | directory | replace | not vendored |  |  |  |  |  | — |
 | process | replace | not vendored |  |  |  |  |  | — |
 | unix | drop | still used | | | | | | |
