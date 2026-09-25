@@ -1,9 +1,5 @@
-{-# LANGUAGE MagicHash #-}
-{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE UnboxedTuples #-}
 
-{-# OPTIONS_GHC -fno-warn-unused-matches #-}
 -- |
 -- Module      : Data.Text.Array
 -- Copyright   : (c) 2009, 2010, 2011 Bryan O'Sullivan
@@ -24,9 +20,12 @@
 -- The names in this module resemble those in the 'Data.Array' family
 -- of modules, but are shorter due to the assumption of qualified
 -- naming.
+--
+-- Cut down for aihc-boot: the arrays are 'ForeignPtr' buffers, so the
+-- module uses only the lifted API of base. Upstream uses 'ByteArray#'
+-- and unboxed tuples.
 module Data.Text.Array (
     Array,
-    pattern ByteArray,
     MArray,
     resizeM,
     shrinkM,
@@ -41,53 +40,46 @@ module Data.Text.Array (
     unsafeWrite,
   ) where
 
-import GHC.Exts hiding (toList)
-import GHC.ST (ST(..), runST)
-import GHC.Word (Word8(..))
-import Prelude hiding (length, read, compare)
-import Data.Array.Byte (ByteArray(..), MutableByteArray(..))
+import Control.Monad.ST (ST, runST)
+import Control.Monad.ST.Unsafe (unsafeIOToST)
+import Data.Word (Word8)
+import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtrBytes, withForeignPtr)
+import Foreign.Marshal.Utils (copyBytes)
+import Foreign.Ptr (Ptr, plusPtr)
+import Foreign.Storable (peekByteOff, pokeByteOff)
+import System.IO.Unsafe (unsafeDupablePerformIO)
 
 -- | Immutable array type.
-type Array = ByteArray
+newtype Array = Array (ForeignPtr Word8)
 
--- | Mutable array type, for use in the ST monad.
-type MArray = MutableByteArray
+-- | Mutable array type, for use in the ST monad. The 'Int' is the size
+-- of the buffer in bytes.
+data MArray s = MArray !(ForeignPtr Word8) !Int
 
 -- | Create an uninitialized mutable array.
 new :: forall s. Int -> ST s (MArray s)
-new (I# len#)
-
-  | otherwise = ST $ \s1# ->
-    case newByteArray# len# s1# of
-      (# s2#, marr# #) -> (# s2#, MutableByteArray marr# #)
+new len = unsafeIOToST $ do
+  fp <- mallocForeignPtrBytes len
+  pure (MArray fp len)
 {-# INLINE new #-}
 
 -- | Freeze a mutable array. Do not mutate the 'MArray' afterwards!
 unsafeFreeze :: MArray s -> ST s Array
-unsafeFreeze (MutableByteArray marr) = ST $ \s1# ->
-    case unsafeFreezeByteArray# marr s1# of
-        (# s2#, ba# #) -> (# s2#, ByteArray ba# #)
+unsafeFreeze (MArray fp _) = pure (Array fp)
 {-# INLINE unsafeFreeze #-}
 
 -- | Unchecked read of an immutable array.  May return garbage or
 -- crash on an out-of-bounds access.
-unsafeIndex ::
-
-  Array -> Int -> Word8
-unsafeIndex (ByteArray arr) i@(I# i#) =
-
-  case indexWord8Array# arr i# of r# -> (W8# r#)
+unsafeIndex :: Array -> Int -> Word8
+unsafeIndex (Array fp) i =
+  unsafeDupablePerformIO $ withForeignPtr fp $ \p -> peekByteOff p i
 {-# INLINE unsafeIndex #-}
 
 -- | Unchecked write of a mutable array.  May return garbage or crash
 -- on an out-of-bounds access.
-unsafeWrite ::
-
-  MArray s -> Int -> Word8 -> ST s ()
-unsafeWrite ma@(MutableByteArray marr) i@(I# i#) (W8# e#) =
-
-  (ST $ \s1# -> case writeWord8Array# marr i# e# s1# of
-    s2# -> (# s2#, () #))
+unsafeWrite :: MArray s -> Int -> Word8 -> ST s ()
+unsafeWrite (MArray fp _) i e =
+  unsafeIOToST $ withForeignPtr fp $ \p -> pokeByteOff p i e
 {-# INLINE unsafeWrite #-}
 
 -- | An empty immutable array.
@@ -99,22 +91,25 @@ empty = runST (new 0 >>= unsafeFreeze)
 run :: (forall s. ST s (MArray s)) -> Array
 run k = runST (k >>= unsafeFreeze)
 
--- | @since 2.0
+-- | Resize a mutable array. The new array keeps the contents of the old
+-- array up to the smaller of the two sizes.
+--
+-- @since 2.0
 resizeM :: MArray s -> Int -> ST s (MArray s)
-resizeM (MutableByteArray ma) i@(I# i#) = ST $ \s1# ->
-  case resizeMutableByteArray# ma i# s1# of
-    (# s2#, newArr #) -> (# s2#, MutableByteArray newArr #)
+resizeM (MArray src srcLen) len = unsafeIOToST $ do
+  dst <- mallocForeignPtrBytes len
+  withForeignPtr src $ \sp -> withForeignPtr dst $ \dp ->
+    copyBytes dp sp (min srcLen len)
+  pure (MArray dst len)
 {-# INLINE resizeM #-}
 
--- | @since 2.0
-shrinkM ::
-
-  MArray s -> Int -> ST s ()
-shrinkM (MutableByteArray marr) i@(I# newSize) = do
-
-  ST $ \s1# ->
-    case shrinkMutableByteArray# marr newSize s1# of
-      s2# -> (# s2#, () #)
+-- | Shrink a mutable array. This version keeps the whole buffer: the
+-- callers only freeze the array after they shrink it, and a 'Text'
+-- records its own length.
+--
+-- @since 2.0
+shrinkM :: MArray s -> Int -> ST s ()
+shrinkM _ _ = pure ()
 {-# INLINE shrinkM #-}
 
 -- | Copy some elements of an immutable array.
@@ -124,11 +119,9 @@ copyI :: Int                    -- ^ Count
       -> Array                  -- ^ Source
       -> Int                    -- ^ Source offset
       -> ST s ()
-copyI count@(I# count#) (MutableByteArray dst#) dstOff@(I# dstOff#) (ByteArray src#) (I# srcOff#)
-
-  | otherwise = ST $ \s1# ->
-    case copyByteArray# src# srcOff# dst# dstOff# count# s1# of
-      s2# -> (# s2#, () #)
+copyI count (MArray dst _) dstOff (Array src) srcOff =
+  unsafeIOToST $ withForeignPtr src $ \sp -> withForeignPtr dst $ \dp ->
+    copyBytes (dp `plusPtr` dstOff) (sp `plusPtr` srcOff) count
 {-# INLINE copyI #-}
 
 -- | Copy from pointer.
@@ -140,29 +133,21 @@ copyFromPointer
   -> Ptr Word8              -- ^ Source
   -> Int                    -- ^ Count
   -> ST s ()
-copyFromPointer (MutableByteArray dst#) dstOff@(I# dstOff#) (Ptr src#) count@(I# count#)
-
-  | otherwise = ST $ \s1# ->
-    case copyAddrToByteArray# src# dst# dstOff# count# s1# of
-      s2# -> (# s2#, () #)
+copyFromPointer (MArray dst _) dstOff src count =
+  unsafeIOToST $ withForeignPtr dst $ \dp ->
+    copyBytes (dp `plusPtr` dstOff) src count
 {-# INLINE copyFromPointer #-}
 
 -- | Compare portions of two arrays for equality.  No bounds checking
 -- is performed.
 equal :: Array -> Int -> Array -> Int -> Int -> Bool
-equal src1 off1 src2 off2 count = compareInternal src1 off1 src2 off2 count == 0
+equal (Array fp1) off1 (Array fp2) off2 count =
+  unsafeDupablePerformIO $ withForeignPtr fp1 $ \p1 -> withForeignPtr fp2 $ \p2 ->
+    let go i
+          | i >= count = pure True
+          | otherwise = do
+              a <- peekByteOff p1 (off1 + i) :: IO Word8
+              b <- peekByteOff p2 (off2 + i)
+              if a == b then go (i + 1) else pure False
+     in go 0
 {-# INLINE equal #-}
-
-compareInternal
-      :: Array                  -- ^ First
-      -> Int                    -- ^ Offset into first
-      -> Array                  -- ^ Second
-      -> Int                    -- ^ Offset into second
-      -> Int                    -- ^ Count
-      -> Int
-compareInternal (ByteArray src1#) (I# off1#) (ByteArray src2#) (I# off2#) (I# count#) = i
-  where
-
-    i = I# (compareByteArrays# src1# off1# src2# off2# count#)
-{-# INLINE compareInternal #-}
-

@@ -68,15 +68,13 @@ import Data.String              (IsString(..))
 import Control.Exception        (assert, throw, Exception)
 import Data.Char                (ord)
 import Data.Word
-import GHC.Base (nullAddr#, realWorld#, unsafeChr)
-import GHC.Exts (Addr#, runRW#, lazy)
-import GHC.Exts                (timesInt2#)
-import GHC.IO                   (IO(IO))
+import GHC.Base (nullAddr#, unsafeChr)
+import GHC.Exts (Addr#)
+import qualified System.IO.Unsafe as Unsafe
 import GHC.ForeignPtr           (ForeignPtr(ForeignPtr)
                                 , mallocPlainForeignPtrBytes)
 import GHC.ForeignPtr           (plusForeignPtr)
 import GHC.ForeignPtr           (ForeignPtrContents(FinalPtr))
-import GHC.Int                  (Int (..))
 import GHC.ForeignPtr           (unsafeWithForeignPtr)
 
 peekFp :: Storable a => ForeignPtr a -> IO a
@@ -103,14 +101,12 @@ peekFpByteOff fp off = unsafeWithForeignPtr fp $ \p ->
 -- that reads from the pointer in its result cannot be executed until
 -- the @'deferForeignPtrAvailability' x@ call is complete.
 --
--- The opaque bits evaporate during CorePrep, so using
--- 'deferForeignPtrAvailability' incurs no direct overhead.
+-- The aihc-boot cut-down drops the opaque part: this version is
+-- @pure $! x@, so the package needs no unboxed tuples.
 --
 -- @since 0.11.5.0
 deferForeignPtrAvailability :: ForeignPtr a -> IO (ForeignPtr a)
-deferForeignPtrAvailability (ForeignPtr addr0# guts) = IO $ \s0 ->
-  case lazy runRW# (\_ -> (# s0, addr0# #)) of
-    (# s1, addr1# #) -> (# s1, ForeignPtr addr1# guts #)
+deferForeignPtrAvailability fp = pure $! fp
 
 -- | Variant of 'fromForeignPtr0' that calls 'deferForeignPtrAvailability'
 --
@@ -121,16 +117,7 @@ mkDeferredByteString fp len = do
   pure $! BS deferredFp len
 
 unsafeDupablePerformIO :: IO a -> a
--- Why does this exist? In base-4.15.1.0 until at least base-4.18.0.0,
--- the version of unsafeDupablePerformIO in base prevents unboxing of
--- its results with an opaque call to GHC.Exts.lazy, for reasons described
--- in Note [unsafePerformIO and strictness] in GHC.IO.Unsafe. (See
--- https://hackage.haskell.org/package/base-4.18.0.0/docs/src/GHC.IO.Unsafe.html#line-30 .)
--- Even if we accept the (very questionable) premise that the sort of
--- function described in that note should work, we expect no such
--- calls to be made in the context of bytestring.  (And we really want
--- unboxing!)
-unsafeDupablePerformIO (IO act) = case runRW# act of (# _, res #) -> res
+unsafeDupablePerformIO = Unsafe.unsafeDupablePerformIO
 
 -- | A space-efficient representation of a 'Word8' vector, supporting many
 -- efficient operations.
@@ -405,11 +392,10 @@ checkedAdd fun x y
 -- Calls 'overflowError' on overflow.
 checkedMultiply :: String -> Int -> Int -> Int
 {-# INLINE checkedMultiply #-}
-checkedMultiply fun !x@(I# x#) !y@(I# y#) = assert (min x y >= 0) $
-
-  case timesInt2# x# y# of
-    (# 0#, _, result #) -> I# result
-    _ -> overflowError fun
+checkedMultiply fun !x !y = assert (min x y >= 0) $
+  if y /= 0 && x > maxBound `quot` y
+    then overflowError fun
+    else x * y
 
 -- | Attempts to convert an 'Integer' value to an 'Int', returning
 -- 'Nothing' if doing so would result in an overflow.
@@ -454,7 +440,7 @@ checkedIntegerToInt x
 -- corrupted and devoured!
 --
 accursedUnutterablePerformIO :: IO a -> a
-accursedUnutterablePerformIO (IO m) = case m realWorld# of (# _, r #) -> r
+accursedUnutterablePerformIO = unsafeDupablePerformIO
 
 memchr :: Ptr Word8 -> Word8 -> CSize -> IO (Ptr Word8)
 

@@ -530,8 +530,6 @@ isValidUtf8 (BS ptr len) = accursedUnutterablePerformIO $ unsafeWithForeignPtr p
   -- in multithreaded contexts.
   -- This specific limit was chosen based on results of a simple benchmark, see:
   -- https://github.com/haskell/bytestring/issues/451#issuecomment-991879338
-  -- When changing this function, also consider changing the related function:
-  -- Data.ByteString.Short.Internal.isValidUtf8
   i <- if len < 1000000
      then cIsValidUtf8 p (fromIntegral len)
      else cIsValidUtf8Safe p (fromIntegral len)

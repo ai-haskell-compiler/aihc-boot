@@ -32,8 +32,6 @@ import Data.Text.Internal.Encoding.Utf8
 import Data.Text.Internal.StrictBuilder (StrictTextBuilder)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
-import qualified Data.ByteString.Short.Internal as SBS
-import qualified Data.Text.Array as A
 import qualified Data.Text.Internal.StrictBuilder as SB
 
 -- Internal invariant:
@@ -225,8 +223,7 @@ decodeUtf8With1 ::
 decodeUtf8With1 onErr msg bs = validateUtf8ChunkFrom 0 bs $ \len ms -> case ms of
     Just s
       | len == B.length bs ->
-        let !(SBS.SBS arr) = SBS.toShort bs in
-        Text (A.ByteArray arr) 0 len
+        SB.toText (SB.unsafeFromByteString bs)
       | otherwise -> SB.toText $
           SB.unsafeFromByteString (B.take len bs) <> skipIncomplete onErr msg s
     Nothing ->
