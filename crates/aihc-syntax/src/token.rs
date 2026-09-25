@@ -17,11 +17,14 @@ impl fmt::Display for Pos {
     }
 }
 
-/// A token with the position of its first character.
+/// A token with the position of its first character, and the position
+/// after its last character. A virtual token of the layout rule has no
+/// characters: its end is its position.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,
     pub pos: Pos,
+    pub end: Pos,
 }
 
 /// The kinds of token the lexer and the layout pass produce.

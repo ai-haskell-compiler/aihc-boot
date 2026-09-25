@@ -195,12 +195,12 @@ impl Printer {
         }
     }
 
-    fn names(&mut self, names: &[String]) {
+    fn names(&mut self, names: &[impl AsRef<str>]) {
         for (i, n) in names.iter().enumerate() {
             if i > 0 {
                 self.push(", ");
             }
-            self.push(&var_name(&QName::unqualified(n.clone())));
+            self.push(&var_name(&QName::unqualified(n.as_ref())));
         }
     }
 
@@ -285,7 +285,7 @@ impl Printer {
                 self.push(" ");
                 self.ty(b);
             }
-            Type::List(t) => {
+            Type::List(t, _) => {
                 self.push("[");
                 self.ty(t);
                 self.push("]");
@@ -295,7 +295,7 @@ impl Printer {
                 self.types(items, ", ");
                 self.push(")");
             }
-            Type::Paren(t) => {
+            Type::Paren(t, _) => {
                 self.push("(");
                 self.ty(t);
                 self.push(")");

@@ -95,6 +95,7 @@ pub fn layout(tokens: Vec<Token>) -> Result<Vec<Token>, LayoutError> {
                 out.push(Token {
                     kind: TokenKind::VOpen,
                     pos,
+                    end: pos,
                 });
                 // The token that opened the block is not the first token on
                 // a new line for the purpose of the `<n>` rule.
@@ -105,10 +106,12 @@ pub fn layout(tokens: Vec<Token>) -> Result<Vec<Token>, LayoutError> {
                 out.push(Token {
                     kind: TokenKind::VOpen,
                     pos,
+                    end: pos,
                 });
                 out.push(Token {
                     kind: TokenKind::VClose,
                     pos,
+                    end: pos,
                 });
             }
         }
@@ -119,6 +122,7 @@ pub fn layout(tokens: Vec<Token>) -> Result<Vec<Token>, LayoutError> {
                     Context::Implicit { .. } => out.push(Token {
                         kind: TokenKind::VClose,
                         pos,
+                        end: pos,
                     }),
                     Context::Explicit { .. } => {
                         return Err(LayoutError {
@@ -141,6 +145,7 @@ pub fn layout(tokens: Vec<Token>) -> Result<Vec<Token>, LayoutError> {
                         out.push(Token {
                             kind: TokenKind::VClose,
                             pos,
+                            end: pos,
                         });
                     }
                     Some(Context::Implicit { col: m, .. }) if col == *m => {
@@ -152,12 +157,14 @@ pub fn layout(tokens: Vec<Token>) -> Result<Vec<Token>, LayoutError> {
                             out.push(Token {
                                 kind: TokenKind::VClose,
                                 pos,
+                                end: pos,
                             });
                             continue;
                         }
                         out.push(Token {
                             kind: TokenKind::VSemi,
                             pos,
+                            end: pos,
                         });
                         break;
                     }
@@ -222,6 +229,7 @@ fn close_implicit_at(stack: &mut Vec<Context>, out: &mut Vec<Token>, depth: u32,
         out.push(Token {
             kind: TokenKind::VClose,
             pos,
+            end: pos,
         });
     }
 }
