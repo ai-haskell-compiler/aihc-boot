@@ -9,7 +9,7 @@
 //! ```
 
 use super::{Parser, Result};
-use crate::ast::{FieldPat, Literal, Pat, QName};
+use crate::ast::{FieldPat, Ident, Literal, Pat, QName, Span};
 use crate::token::{Keyword, ReservedOp, TokenKind};
 
 impl Parser {
@@ -32,23 +32,27 @@ impl Parser {
 
     /// A constructor operator, consumed: `:`, `:|`, `` `Con` ``.
     fn con_operator(&mut self) -> Option<QName> {
+        let span = self.token_span();
         match self.kind() {
             TokenKind::ConSym { qual, name } => {
                 let op = QName {
                     qual: qual.clone(),
                     name: name.clone(),
+                    span,
                 };
                 self.bump();
                 Some(op)
             }
             TokenKind::ReservedOp(ReservedOp::Colon) => {
                 self.bump();
-                Some(QName::unqualified(":"))
+                Some(QName {
+                    span,
+                    ..QName::unqualified(":")
+                })
             }
             TokenKind::Special('`') => {
-                let Some(TokenKind::ConId { qual, name }) =
-                    self.tokens.get(self.idx + 1).map(|t| &t.kind)
-                else {
+                let inner = self.tokens.get(self.idx + 1)?;
+                let TokenKind::ConId { qual, name } = &inner.kind else {
                     return None;
                 };
                 if !matches!(
@@ -60,6 +64,10 @@ impl Parser {
                 let op = QName {
                     qual: qual.clone(),
                     name: name.clone(),
+                    span: Span {
+                        start: inner.pos,
+                        end: inner.end,
+                    },
                 };
                 self.idx += 3;
                 Some(op)
@@ -79,8 +87,7 @@ impl Parser {
                 negative: true,
             });
         }
-        if let Some(name) = self.gcon_ahead() {
-            self.bump_gcon(&name);
+        if let Some(name) = self.gcon() {
             if self.at_special('{') {
                 return self.record_pat(name);
             }
@@ -118,6 +125,7 @@ impl Parser {
             TokenKind::ConId { qual, name } => Some(QName {
                 qual: qual.clone(),
                 name: name.clone(),
+                span: Span::default(),
             }),
             TokenKind::Special('(') => {
                 let mut i = self.idx + 1;
@@ -147,6 +155,7 @@ impl Parser {
                             Some(QName {
                                 qual: qual.clone(),
                                 name: name.clone(),
+                                span: Span::default(),
                             })
                         } else {
                             None
@@ -179,8 +188,17 @@ impl Parser {
         }
     }
 
+    /// A constructor name, consumed, with its span: see `gcon_ahead`.
+    pub(super) fn gcon(&mut self) -> Option<QName> {
+        let start = self.pos();
+        let mut name = self.gcon_ahead()?;
+        self.bump_gcon(&name);
+        name.span = self.span_from(start);
+        Some(name)
+    }
+
     /// Consume the tokens of a constructor name that `gcon_ahead` found.
-    pub(super) fn bump_gcon(&mut self, name: &QName) {
+    fn bump_gcon(&mut self, name: &QName) {
         match self.kind() {
             TokenKind::ConId { .. } => {
                 self.bump();
@@ -221,7 +239,7 @@ impl Parser {
     pub(super) fn apat(&mut self) -> Result<Pat> {
         match self.kind() {
             TokenKind::VarId { qual, name } if qual.is_empty() => {
-                let name = name.clone();
+                let name = Ident::new(name.clone(), self.token_span());
                 self.bump();
                 if self.eat(&TokenKind::ReservedOp(ReservedOp::At)) {
                     let inner = self.apat()?;
@@ -252,8 +270,7 @@ impl Parser {
                 })
             }
             TokenKind::Special('[') => {
-                if let Some(name) = self.gcon_ahead() {
-                    self.bump_gcon(&name);
+                if let Some(name) = self.gcon() {
                     return Ok(Pat::Con {
                         name,
                         args: Vec::new(),
@@ -270,8 +287,7 @@ impl Parser {
                 }
             }
             TokenKind::Special('(') => {
-                if let Some(name) = self.gcon_ahead() {
-                    self.bump_gcon(&name);
+                if let Some(name) = self.gcon() {
                     if self.at_special('{') {
                         return self.record_pat(name);
                     }
@@ -283,8 +299,7 @@ impl Parser {
                 self.paren_pat()
             }
             TokenKind::ConId { .. } => {
-                let name = self.gcon_ahead().unwrap();
-                self.bump();
+                let name = self.gcon().unwrap();
                 if self.at_special('{') {
                     return self.record_pat(name);
                 }

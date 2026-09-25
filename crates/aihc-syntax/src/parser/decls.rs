@@ -3,8 +3,8 @@
 
 use super::{Parser, Result};
 use crate::ast::{
-    Assoc, BangType, ConBody, ConDecl, Decl, DerivStrategy, Deriving, Field, Lhs, Pat, PatSynDir,
-    PatSynLhs, Type,
+    Assoc, BangType, ConBody, ConDecl, Decl, DerivStrategy, Deriving, Field, Ident, Lhs, Pat,
+    PatSynDir, PatSynLhs, Span, Type,
 };
 use crate::token::{Keyword, ReservedOp, TokenKind};
 
@@ -152,13 +152,14 @@ impl Parser {
 
     /// A variable operator, not consumed, with its token count: `<+>` or
     /// `` `f` ``. Constructor operators belong to patterns.
-    fn var_operator_ahead(&self) -> Option<(String, usize)> {
+    fn var_operator_ahead(&self) -> Option<(Ident, usize)> {
         match self.kind() {
-            TokenKind::VarSym { qual, name } if qual.is_empty() => Some((name.clone(), 1)),
+            TokenKind::VarSym { qual, name } if qual.is_empty() => {
+                Some((Ident::new(name.clone(), self.token_span()), 1))
+            }
             TokenKind::Special('`') => {
-                let Some(TokenKind::VarId { qual, name }) =
-                    self.tokens.get(self.idx + 1).map(|t| &t.kind)
-                else {
+                let inner = self.tokens.get(self.idx + 1)?;
+                let TokenKind::VarId { qual, name } = &inner.kind else {
                     return None;
                 };
                 if !qual.is_empty()
@@ -169,16 +170,20 @@ impl Parser {
                 {
                     return None;
                 }
-                Some((format!("`{name}`"), 3))
+                let span = Span {
+                    start: inner.pos,
+                    end: inner.end,
+                };
+                Some((Ident::new(format!("`{name}`"), span), 3))
             }
             _ => None,
         }
     }
 
     /// A name in a signature: `f` or `(+)`.
-    fn sig_name(&mut self) -> Result<String> {
+    fn sig_name(&mut self) -> Result<Ident> {
         if let Some(name) = self.parenthesized_name() {
-            return Ok(name.name);
+            return Ok(Ident::new(name.name, name.span));
         }
         self.varid()
     }
@@ -190,7 +195,7 @@ impl Parser {
         let start = self.idx;
         let mut names = Vec::new();
         while let Ok(name) = self.conid() {
-            names.push(name);
+            names.push(name.name);
             if !self.eat_special(',') {
                 break;
             }
@@ -200,12 +205,12 @@ impl Parser {
             return Ok(Decl::PatSynSig { pos, names, ty });
         }
         self.idx = start;
-        let lhs = if let Ok(name) = self.conid() {
+        let lhs = if let Ok(Ident { name, .. }) = self.conid() {
             if self.eat_special('{') {
                 let mut fields = Vec::new();
                 if !self.at_special('}') {
                     loop {
-                        fields.push(self.varid()?);
+                        fields.push(self.varid()?.name);
                         if !self.eat_special(',') {
                             break;
                         }
@@ -219,12 +224,12 @@ impl Parser {
                     if !qual.is_empty() {
                         break;
                     }
-                    args.push(self.varid()?);
+                    args.push(self.varid()?.name);
                 }
                 PatSynLhs::Prefix { name, args }
             }
         } else {
-            let left = self.varid()?;
+            let left = self.varid()?.name;
             let op = match self.kind() {
                 TokenKind::ConSym { qual, name } if qual.is_empty() => {
                     let name = name.clone();
@@ -239,11 +244,11 @@ impl Parser {
                     self.bump();
                     let name = self.conid()?;
                     self.expect_special('`')?;
-                    format!("`{name}`")
+                    format!("`{}`", name.name)
                 }
                 _ => return self.unexpected("a constructor operator"),
             };
-            let right = self.varid()?;
+            let right = self.varid()?.name;
             PatSynLhs::Infix { left, op, right }
         };
         let (dir, pat) = if self.eat(&TokenKind::ReservedOp(ReservedOp::Equals)) {
@@ -261,10 +266,10 @@ impl Parser {
     }
 
     /// An unqualified constructor name.
-    fn conid(&mut self) -> Result<String> {
+    fn conid(&mut self) -> Result<Ident> {
         match self.kind() {
             TokenKind::ConId { qual, name } if qual.is_empty() => {
-                let name = name.clone();
+                let name = Ident::new(name.clone(), self.token_span());
                 self.bump();
                 Ok(name)
             }
@@ -343,7 +348,7 @@ impl Parser {
         self.bump();
         // A type operator in prefix form: `data (:+:) f g p`.
         let name = match self.parenthesized_name() {
-            Some(name) if name.qual.is_empty() => name.name,
+            Some(name) if name.qual.is_empty() => Ident::new(name.name, name.span),
             Some(_) => return self.unexpected("an unqualified type constructor"),
             None => self.conid()?,
         };
@@ -393,21 +398,22 @@ impl Parser {
         };
         let body = if self.con_is_infix() {
             let left = self.infix_con_arg()?;
+            let span = self.token_span();
             let op = match self.kind() {
                 TokenKind::ConSym { qual, name } if qual.is_empty() => {
-                    let name = name.clone();
+                    let name = Ident::new(name.clone(), span);
                     self.bump();
                     name
                 }
                 TokenKind::ReservedOp(ReservedOp::Colon) => {
                     self.bump();
-                    ":".to_string()
+                    Ident::new(":", span)
                 }
                 TokenKind::Special('`') => {
                     self.bump();
                     let name = self.conid()?;
                     self.expect_special('`')?;
-                    format!("`{name}`")
+                    Ident::new(format!("`{}`", name.name), name.span)
                 }
                 _ => return self.unexpected("a constructor operator"),
             };
@@ -421,9 +427,10 @@ impl Parser {
         {
             // The empty list constructor, in the declaration of the list
             // type: `data List a = [] | a : List a`.
+            let start = self.pos();
             self.idx += 2;
             ConBody::Prefix {
-                name: "[]".to_string(),
+                name: Ident::new("[]", self.span_from(start)),
                 args: Vec::new(),
             }
         } else {

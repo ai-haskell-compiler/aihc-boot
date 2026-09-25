@@ -18,7 +18,7 @@
 
 use super::decls::DeclContext;
 use super::{Parser, Result};
-use crate::ast::{Alt, Decl, Expr, FieldUpdate, GuardedRhs, QName, Rhs, RhsBody, Stmt};
+use crate::ast::{Alt, Decl, Expr, FieldUpdate, GuardedRhs, QName, Rhs, RhsBody, Span, Stmt};
 use crate::token::{Keyword, ReservedOp, TokenKind};
 
 impl Parser {
@@ -76,23 +76,34 @@ impl Parser {
     /// An operator at the current position, not consumed, with the number
     /// of tokens it takes: `+`, `M.+`, `:`, `:|`, `` `f` ``, `` `M.f` ``.
     pub(super) fn operator_ahead(&self) -> Option<(QName, usize)> {
+        let span = self.token_span();
         match self.kind() {
             TokenKind::VarSym { qual, name } | TokenKind::ConSym { qual, name } => Some((
                 QName {
                     qual: qual.clone(),
                     name: name.clone(),
+                    span,
                 },
                 1,
             )),
-            TokenKind::ReservedOp(ReservedOp::Colon) => Some((QName::unqualified(":"), 1)),
+            TokenKind::ReservedOp(ReservedOp::Colon) => Some((
+                QName {
+                    span,
+                    ..QName::unqualified(":")
+                },
+                1,
+            )),
             TokenKind::Special('`') => {
-                let name = match self.tokens.get(self.idx + 1).map(|t| &t.kind) {
-                    Some(TokenKind::VarId { qual, name } | TokenKind::ConId { qual, name }) => {
-                        QName {
-                            qual: qual.clone(),
-                            name: name.clone(),
-                        }
-                    }
+                let inner = self.tokens.get(self.idx + 1)?;
+                let name = match &inner.kind {
+                    TokenKind::VarId { qual, name } | TokenKind::ConId { qual, name } => QName {
+                        qual: qual.clone(),
+                        name: name.clone(),
+                        span: Span {
+                            start: inner.pos,
+                            end: inner.end,
+                        },
+                    },
                     _ => return None,
                 };
                 if !matches!(
@@ -234,6 +245,7 @@ impl Parser {
                 let name = QName {
                     qual: qual.clone(),
                     name: name.clone(),
+                    span: self.token_span(),
                 };
                 self.bump();
                 Ok(Expr::Var(name))
@@ -247,13 +259,11 @@ impl Parser {
             | TokenKind::Char { .. }
             | TokenKind::String { .. } => Ok(Expr::Lit(self.literal()?)),
             TokenKind::ConId { .. } => {
-                let name = self.gcon_ahead().unwrap();
-                self.bump();
+                let name = self.gcon().unwrap();
                 Ok(Expr::Con(name))
             }
             TokenKind::Special('(') => {
-                if let Some(name) = self.gcon_ahead() {
-                    self.bump_gcon(&name);
+                if let Some(name) = self.gcon() {
                     return Ok(Expr::Con(name));
                 }
                 if let Some(name) = self.parenthesized_name() {
@@ -262,8 +272,7 @@ impl Parser {
                 self.paren_exp()
             }
             TokenKind::Special('[') => {
-                if let Some(name) = self.gcon_ahead() {
-                    self.bump_gcon(&name);
+                if let Some(name) = self.gcon() {
                     return Ok(Expr::Con(name));
                 }
                 self.bracket_exp()

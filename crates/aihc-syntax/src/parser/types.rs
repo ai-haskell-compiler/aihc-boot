@@ -18,7 +18,7 @@
 //! so the printer reproduces the tokens and a reader sees the same fixity.
 
 use super::{Parser, Result};
-use crate::ast::{BangType, QName, TyVarBind, Type};
+use crate::ast::{BangType, Ident, QName, Span, TyVarBind, Type};
 use crate::token::{Keyword, ReservedOp, TokenKind};
 
 impl Parser {
@@ -48,7 +48,7 @@ impl Parser {
             match self.kind() {
                 TokenKind::VarId { qual, name } if qual.is_empty() => {
                     binders.push(TyVarBind {
-                        name: name.clone(),
+                        name: Ident::new(name.clone(), self.token_span()),
                         kind: None,
                     });
                     self.bump();
@@ -80,10 +80,10 @@ impl Parser {
     }
 
     /// An unqualified variable name.
-    pub(super) fn varid(&mut self) -> Result<String> {
+    pub(super) fn varid(&mut self) -> Result<Ident> {
         match self.kind() {
             TokenKind::VarId { qual, name } if qual.is_empty() => {
-                let name = name.clone();
+                let name = Ident::new(name.clone(), self.token_span());
                 self.bump();
                 Ok(name)
             }
@@ -117,20 +117,28 @@ impl Parser {
     /// A type operator, consumed: `:+:`, `~`, `` `Op` `` or a symbol
     /// such as `+`.
     fn type_operator(&mut self) -> Option<QName> {
+        let span = self.token_span();
         let op = match self.kind() {
             TokenKind::ConSym { qual, name } | TokenKind::VarSym { qual, name } => QName {
                 qual: qual.clone(),
                 name: name.clone(),
+                span,
             },
-            TokenKind::ReservedOp(ReservedOp::Tilde) => QName::unqualified("~"),
+            TokenKind::ReservedOp(ReservedOp::Tilde) => QName {
+                span,
+                ..QName::unqualified("~")
+            },
             TokenKind::Special('`') => {
-                let name = match self.tokens.get(self.idx + 1).map(|t| &t.kind) {
-                    Some(TokenKind::ConId { qual, name } | TokenKind::VarId { qual, name }) => {
-                        QName {
-                            qual: qual.clone(),
-                            name: name.clone(),
-                        }
-                    }
+                let inner = self.tokens.get(self.idx + 1)?;
+                let name = match &inner.kind {
+                    TokenKind::ConId { qual, name } | TokenKind::VarId { qual, name } => QName {
+                        qual: qual.clone(),
+                        name: name.clone(),
+                        span: Span {
+                            start: inner.pos,
+                            end: inner.end,
+                        },
+                    },
                     _ => return None,
                 };
                 if !matches!(
@@ -186,7 +194,7 @@ impl Parser {
     pub(super) fn atype(&mut self) -> Result<Type> {
         match self.kind() {
             TokenKind::VarId { qual, name } if qual.is_empty() => {
-                let name = name.clone();
+                let name = Ident::new(name.clone(), self.token_span());
                 self.bump();
                 Ok(Type::Var(name))
             }
@@ -194,6 +202,7 @@ impl Parser {
                 let name = QName {
                     qual: qual.clone(),
                     name: name.clone(),
+                    span: self.token_span(),
                 };
                 self.bump();
                 Ok(Type::Con(name))
@@ -214,10 +223,15 @@ impl Parser {
                 Ok(Type::Lit(self.literal()?))
             }
             TokenKind::Special('[') => {
+                let start = self.pos();
                 let mut items = self.bracketed_types()?;
+                let span = self.span_from(start);
                 Ok(match items.len() {
-                    0 => Type::Con(QName::unqualified("[]")),
-                    1 => Type::List(Box::new(items.pop().unwrap())),
+                    0 => Type::Con(QName {
+                        span,
+                        ..QName::unqualified("[]")
+                    }),
+                    1 => Type::List(Box::new(items.pop().unwrap()), span),
                     _ => Type::PromotedList(items),
                 })
             }
@@ -245,14 +259,21 @@ impl Parser {
     /// Everything that starts with `(`: unit, tuple constructors, the
     /// function arrow, parenthesized types, tuples and kind signatures.
     fn paren_type(&mut self) -> Result<Type> {
+        let start = self.pos();
+        let con = |name: &str, span| {
+            Type::Con(QName {
+                span,
+                ..QName::unqualified(name)
+            })
+        };
         self.expect_special('(')?;
         if self.eat_special(')') {
-            return Ok(Type::Con(QName::unqualified("()")));
+            return Ok(con("()", self.span_from(start)));
         }
         if self.at(&TokenKind::ReservedOp(ReservedOp::RightArrow)) {
             self.bump();
             self.expect_special(')')?;
-            return Ok(Type::Con(QName::unqualified("->")));
+            return Ok(con("->", self.span_from(start)));
         }
         if self.at_special(',') {
             let mut name = String::from("(");
@@ -261,23 +282,24 @@ impl Parser {
             }
             name.push(')');
             self.expect_special(')')?;
-            return Ok(Type::Con(QName::unqualified(name)));
+            return Ok(con(&name, self.span_from(start)));
         }
         // An operator in parentheses, such as `(:+:)` or `(~)`.
-        if let Some(name) = self.parenthesized_name_after_open() {
+        if let Some(mut name) = self.parenthesized_name_after_open() {
+            name.span = self.span_from(start);
             return Ok(Type::Con(name));
         }
         let first = self.ty()?;
         if self.eat(&TokenKind::ReservedOp(ReservedOp::DoubleColon)) {
             let kind = self.ty()?;
             self.expect_special(')')?;
-            return Ok(Type::Paren(Box::new(Type::KindSig(
-                Box::new(first),
-                Box::new(kind),
-            ))));
+            return Ok(Type::Paren(
+                Box::new(Type::KindSig(Box::new(first), Box::new(kind))),
+                self.span_from(start),
+            ));
         }
         if self.eat_special(')') {
-            return Ok(Type::Paren(Box::new(first)));
+            return Ok(Type::Paren(Box::new(first), self.span_from(start)));
         }
         let mut items = vec![first];
         while self.eat_special(',') {
@@ -293,10 +315,12 @@ impl Parser {
             TokenKind::VarSym { qual, name } | TokenKind::ConSym { qual, name } => QName {
                 qual: qual.clone(),
                 name: name.clone(),
+                span: Span::default(),
             },
             TokenKind::ReservedOp(ReservedOp::Tilde) => QName::unqualified("~"),
             _ => return None,
         };
+        // The caller sets the span, because it knows where `(` is.
         if !matches!(
             self.tokens.get(self.idx + 1).map(|t| &t.kind),
             Some(TokenKind::Special(')'))

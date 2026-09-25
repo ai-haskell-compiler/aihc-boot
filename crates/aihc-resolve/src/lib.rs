@@ -6,12 +6,17 @@
 //! print the same records (see [`record`]), and [`compare`] decides whether
 //! a module resolves the same way in both.
 //!
-//! The resolver itself is not written yet: [`resolve_module`] fails for
-//! every module.
+//! [`scope::Program`] holds the top-level names of every package, and
+//! [`resolve_module`] resolves one module of it. The resolver handles the
+//! constructs of the vendored `base` and `deepseq`. It refuses the others
+//! with a "not supported yet" error.
 
 pub mod record;
+mod resolve;
+pub mod scope;
 
 pub use record::{Namespace, Occurrence, Span, Target};
+pub use scope::{builtin_modules, Package, Program, SourceModule};
 
 use std::collections::HashMap;
 
@@ -22,17 +27,15 @@ pub struct ResolveError {
     pub pos: Option<aihc_syntax::Pos>,
 }
 
-/// Every identifier occurrence of a module with its target, sorted by
-/// span.
+/// Every identifier occurrence of the module in the file at `path`, with
+/// its target, sorted by span. The module's package must be in `program`.
 ///
 /// # Errors
 ///
-/// Fails while the resolver is not implemented.
-pub fn resolve_module(_module: &aihc_syntax::ast::Module) -> Result<Vec<Occurrence>, ResolveError> {
-    Err(ResolveError {
-        message: "resolve: not implemented yet".into(),
-        pos: None,
-    })
+/// The module uses a construct that the resolver does not handle yet, or
+/// it imports a module that does not resolve.
+pub fn resolve_module(program: &Program, path: &str) -> Result<Vec<Occurrence>, ResolveError> {
+    resolve::resolve(program, path)
 }
 
 /// Where two resolutions of one module differ.

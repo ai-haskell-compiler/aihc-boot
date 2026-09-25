@@ -14,7 +14,7 @@
 //! nor the block's `}`, or when an item cannot start, the block closes
 //! there and its virtual `}` is removed from the stream.
 
-use crate::ast::{Export, Import, ImportItem, Module, QName, Qualified, Subs};
+use crate::ast::{Export, Import, ImportItem, Module, QName, Qualified, Span, Subs};
 use crate::token::{Keyword, Pos, ReservedOp, Token, TokenKind};
 use std::fmt;
 
@@ -64,6 +64,24 @@ impl Parser {
 
     fn pos(&self) -> Pos {
         self.peek().pos
+    }
+
+    /// The span of the current token.
+    fn token_span(&self) -> Span {
+        let tok = self.peek();
+        Span {
+            start: tok.pos,
+            end: tok.end,
+        }
+    }
+
+    /// The span from `start` to the end of the last consumed token.
+    fn span_from(&self, start: Pos) -> Span {
+        let end = match self.idx.checked_sub(1).and_then(|i| self.tokens.get(i)) {
+            Some(tok) => tok.end,
+            None => start,
+        };
+        Span { start, end }
     }
 
     fn bump(&mut self) -> &Token {
@@ -280,10 +298,12 @@ impl Parser {
         if !self.at_special('(') {
             return None;
         }
-        let name = match &self.tokens.get(self.idx + 1).map(|t| &t.kind) {
+        let start = self.pos();
+        let mut name = match &self.tokens.get(self.idx + 1).map(|t| &t.kind) {
             Some(TokenKind::VarSym { qual, name } | TokenKind::ConSym { qual, name }) => QName {
                 qual: qual.clone(),
                 name: name.clone(),
+                span: Span::default(),
             },
             Some(TokenKind::ReservedOp(op @ (ReservedOp::Colon | ReservedOp::Tilde))) => {
                 QName::unqualified(op.as_str())
@@ -297,6 +317,7 @@ impl Parser {
             return None;
         }
         self.idx += 3;
+        name.span = self.span_from(start);
         Some(name)
     }
 
@@ -412,6 +433,7 @@ impl Parser {
                 let qname = QName {
                     qual: qual.clone(),
                     name: name.clone(),
+                    span: self.token_span(),
                 };
                 self.bump();
                 Ok(qname)

@@ -7,20 +7,103 @@
 
 use crate::token::Pos;
 
+/// Where a piece of syntax is in the source: the position of its first
+/// character, and the position after its last character.
+///
+/// A span does not take part in comparisons. Two trees are equal when
+/// they have the same syntax, at any place in the source. Thus the tests
+/// can compare trees without positions, and a printed module compares
+/// equal to the original.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Span {
+    pub start: Pos,
+    pub end: Pos,
+}
+
+impl PartialEq for Span {
+    fn eq(&self, _: &Span) -> bool {
+        true
+    }
+}
+
+impl Eq for Span {}
+
 /// A possibly qualified name. The qualifier is empty for an unqualified
 /// name. Operators keep their symbol spelling, without parentheses.
+///
+/// The span covers the name as written: with the parentheses of `(+)`,
+/// but without the backquotes of `` `div` ``.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QName {
     pub qual: String,
     pub name: String,
+    pub span: Span,
 }
 
 impl QName {
+    /// An unqualified name without a place in the source.
     pub fn unqualified(name: impl Into<String>) -> QName {
         QName {
             qual: String::new(),
             name: name.into(),
+            span: Span::default(),
         }
+    }
+}
+
+/// An unqualified name that a declaration or a pattern binds. The span
+/// covers the name as written, as for [`QName`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ident {
+    pub name: String,
+    pub span: Span,
+}
+
+impl Ident {
+    pub fn new(name: impl Into<String>, span: Span) -> Ident {
+        Ident {
+            name: name.into(),
+            span,
+        }
+    }
+}
+
+impl std::ops::Deref for Ident {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.name
+    }
+}
+
+impl From<&str> for Ident {
+    /// A name without a place in the source.
+    fn from(name: &str) -> Ident {
+        Ident::new(name, Span::default())
+    }
+}
+
+impl From<Ident> for String {
+    fn from(name: Ident) -> String {
+        name.name
+    }
+}
+
+impl AsRef<str> for Ident {
+    fn as_ref(&self) -> &str {
+        &self.name
+    }
+}
+
+impl PartialEq<str> for Ident {
+    fn eq(&self, other: &str) -> bool {
+        self.name == other
+    }
+}
+
+impl PartialEq<&str> for Ident {
+    fn eq(&self, other: &&str) -> bool {
+        self.name == *other
     }
 }
 
@@ -105,7 +188,7 @@ pub struct Import {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
     /// A type variable, such as `a`.
-    Var(String),
+    Var(Ident),
     /// A type constructor, such as `Maybe`, `M.T`, `()`, `[]`, `(->)` or
     /// `(,)`. The name keeps its source spelling.
     Con(QName),
@@ -117,12 +200,12 @@ pub enum Type {
     Fun(Box<Type>, Box<Type>),
     /// `a `Op` b`, `a :+: b` or `a ~ b`
     Op(Box<Type>, QName, Box<Type>),
-    /// `[a]`
-    List(Box<Type>),
+    /// `[a]`, with the span of the brackets.
+    List(Box<Type>, Span),
     /// `(a, b)`. The empty tuple `()` is `Con`.
     Tuple(Vec<Type>),
-    /// `(t)`
-    Paren(Box<Type>),
+    /// `(t)`, with the span of the parentheses.
+    Paren(Box<Type>, Span),
     /// `forall a b. t`
     Forall(Vec<TyVarBind>, Box<Type>),
     /// `ctx => t`. The context is a type: one constraint, or a tuple of
@@ -153,7 +236,7 @@ pub enum Literal {
 /// A type variable binder: `a` or `(a :: k)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TyVarBind {
-    pub name: String,
+    pub name: Ident,
     pub kind: Option<Type>,
 }
 
@@ -184,11 +267,11 @@ pub enum Decl {
     /// `f, g :: t`
     TypeSig {
         pos: Pos,
-        names: Vec<String>,
+        names: Vec<Ident>,
         ty: Type,
     },
     /// `default f :: t` in a class body (`DefaultSignatures`).
-    DefaultSig { pos: Pos, name: String, ty: Type },
+    DefaultSig { pos: Pos, name: Ident, ty: Type },
     /// `pattern P :: t`
     PatSynSig {
         pos: Pos,
@@ -206,7 +289,7 @@ pub enum Decl {
     Data {
         pos: Pos,
         newtype: bool,
-        name: String,
+        name: Ident,
         vars: Vec<TyVarBind>,
         /// `data T :: k`
         kind: Option<Type>,
@@ -216,14 +299,14 @@ pub enum Decl {
     /// `type T a = t`
     TypeSyn {
         pos: Pos,
-        name: String,
+        name: Ident,
         vars: Vec<TyVarBind>,
         rhs: Type,
     },
     /// `type F a :: k` in a class body, or `type family F a :: k`.
     TypeFamily {
         pos: Pos,
-        name: String,
+        name: Ident,
         vars: Vec<TyVarBind>,
         kind: Option<Type>,
     },
@@ -233,7 +316,7 @@ pub enum Decl {
     Class {
         pos: Pos,
         ctx: Option<Type>,
-        name: String,
+        name: Ident,
         vars: Vec<TyVarBind>,
         body: Vec<Decl>,
     },
@@ -297,21 +380,21 @@ pub struct ConDecl {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConBody {
     /// `C a b`
-    Prefix { name: String, args: Vec<BangType> },
+    Prefix { name: Ident, args: Vec<BangType> },
     /// `a :+ b`
     Infix {
         left: BangType,
-        op: String,
+        op: Ident,
         right: BangType,
     },
     /// `C { f :: a, g, h :: b }`
-    Record { name: String, fields: Vec<Field> },
+    Record { name: Ident, fields: Vec<Field> },
 }
 
 /// One record field group: `f, g :: t`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Field {
-    pub names: Vec<String>,
+    pub names: Vec<Ident>,
     pub ty: BangType,
 }
 
@@ -340,11 +423,11 @@ pub enum DerivStrategy {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Lhs {
     /// `f p1 p2`
-    Fun { name: String, args: Vec<Pat> },
+    Fun { name: Ident, args: Vec<Pat> },
     /// `p1 op p2`, and `(p1 op p2) p3 ...` with `args`.
     Infix {
         left: Pat,
-        op: String,
+        op: Ident,
         right: Pat,
         args: Vec<Pat>,
     },
@@ -408,7 +491,7 @@ pub enum PatSynDir {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pat {
-    Var(String),
+    Var(Ident),
     Wildcard,
     /// A literal; `negative` for `-1`.
     Lit {
@@ -435,7 +518,7 @@ pub enum Pat {
     List(Vec<Pat>),
     Paren(Box<Pat>),
     /// `x@p`
-    As(String, Box<Pat>),
+    As(Ident, Box<Pat>),
     /// `~p`
     Lazy(Box<Pat>),
     /// `!p`

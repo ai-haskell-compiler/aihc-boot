@@ -109,6 +109,61 @@ mod tests {
         }
     }
 
+    fn at(line: u32, col: u32) -> Pos {
+        Pos { line, col }
+    }
+
+    /// Names carry the span of the name as written, and bracketed types
+    /// the span of their brackets.
+    #[test]
+    fn names_have_spans() {
+        use ast::{Decl, Expr, Lhs, Pat, RhsBody, Type};
+        let module =
+            parse("module M where\n(.) p = (.) x `k` M.y\ng :: [a] -> (a :+: b)\n").unwrap();
+        let Decl::Bind { lhs, rhs, .. } = &module.decls[0] else {
+            panic!("{:?}", module.decls[0]);
+        };
+        let Lhs::Fun { name, args } = lhs else {
+            panic!("{lhs:?}");
+        };
+        assert_eq!((name.span.start, name.span.end), (at(2, 1), at(2, 4)));
+        let Pat::Var(arg) = &args[0] else {
+            panic!("{:?}", args[0]);
+        };
+        assert_eq!((arg.span.start, arg.span.end), (at(2, 5), at(2, 6)));
+        let RhsBody::Plain(Expr::Infix { first, rest }) = &rhs.body else {
+            panic!("{rhs:?}");
+        };
+        let Expr::App(fun, _) = &**first else {
+            panic!("{first:?}");
+        };
+        let Expr::Var(op) = &**fun else {
+            panic!("{fun:?}");
+        };
+        // `(.)` with its parentheses, `k` without its backquotes, and a
+        // qualified name with its qualifier.
+        assert_eq!((op.span.start, op.span.end), (at(2, 9), at(2, 12)));
+        assert_eq!(
+            (rest[0].0.span.start, rest[0].0.span.end),
+            (at(2, 16), at(2, 17))
+        );
+        let Expr::Var(y) = &rest[0].1 else {
+            panic!("{:?}", rest[0].1);
+        };
+        assert_eq!((y.span.start, y.span.end), (at(2, 19), at(2, 22)));
+        let Decl::TypeSig { ty, .. } = &module.decls[1] else {
+            panic!("{:?}", module.decls[1]);
+        };
+        let Type::Fun(list, paren) = ty else {
+            panic!("{ty:?}");
+        };
+        let (Type::List(_, list), Type::Paren(_, paren)) = (&**list, &**paren) else {
+            panic!("{ty:?}");
+        };
+        assert_eq!((list.start, list.end), (at(3, 6), at(3, 9)));
+        assert_eq!((paren.start, paren.end), (at(3, 13), at(3, 22)));
+    }
+
     /// Every vendored module that parses must survive a print and a
     /// second parse with the same tree. Modules that do not parse yet are
     /// skipped here; the tracker counts them.

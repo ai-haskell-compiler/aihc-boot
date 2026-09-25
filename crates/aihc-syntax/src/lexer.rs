@@ -244,6 +244,7 @@ impl Lexer {
         Ok(keep.then_some(Token {
             kind: TokenKind::Pragma(text),
             pos: start,
+            end: self.pos,
         }))
     }
 
@@ -256,6 +257,7 @@ impl Lexer {
             return Ok(Token {
                 kind: TokenKind::Eof,
                 pos: start,
+                end: start,
             });
         };
         let kind = match c {
@@ -283,7 +285,11 @@ impl Lexer {
             }
             c => return self.error(start, format!("unexpected character {c:?}")),
         };
-        Ok(Token { kind, pos: start })
+        Ok(Token {
+            kind,
+            pos: start,
+            end: self.pos,
+        })
     }
 
     /// An identifier segment: letters, digits, `_`, `'`, and with
