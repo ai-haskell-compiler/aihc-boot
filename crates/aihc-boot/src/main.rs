@@ -110,10 +110,17 @@ fn check(args: &[String]) -> Result<(), String> {
     let (stage, package, pkg_dir) = stage_and_package(args, &["parse", "resolve", "typecheck"])?;
     let reference = Reference::for_package(&pkg_dir);
     let mut oracle = Oracle::new(&package);
+    // The resolver needs the top-level names of the package and of its
+    // dependencies.
+    let program = if stage == "parse" {
+        None
+    } else {
+        Some(manifest::program(&package))
+    };
     let mut stdout = std::io::stdout().lock();
     let mut out = String::new();
     for file in manifest::haskell_files(&pkg_dir) {
-        let report = check_module(&file, &stage, &reference, &mut oracle);
+        let report = check_module(&file, &stage, &reference, &mut oracle, program.as_ref());
         out.clear();
         write!(
             out,
@@ -252,7 +259,13 @@ fn read_module(file: &Path) -> Result<aihc_syntax::ast::Module, Report> {
         .map_err(|e| Report::fail(format!("{}: {}", e.stage, e.message), Some(e.pos)))
 }
 
-fn check_module(file: &Path, stage: &str, reference: &Reference, oracle: &mut Oracle) -> Report {
+fn check_module(
+    file: &Path,
+    stage: &str,
+    reference: &Reference,
+    oracle: &mut Oracle,
+    program: Option<&Result<aihc_resolve::Program, String>>,
+) -> Report {
     let module = match read_module(file) {
         Ok(module) => module,
         Err(report) => return report,
@@ -304,7 +317,12 @@ fn check_module(file: &Path, stage: &str, reference: &Reference, oracle: &mut Or
         };
     }
     // Resolve: our records must agree with the oracle's.
-    let ours = match aihc_resolve::resolve_module(&module) {
+    let program = match program {
+        Some(Ok(program)) => program,
+        Some(Err(e)) => return Report::fail(format!("resolve: {e}"), None),
+        None => return Report::fail("resolve: no program", None),
+    };
+    let ours = match aihc_resolve::resolve_module(program, &file.display().to_string()) {
         Ok(ours) => ours,
         Err(e) => return Report::fail(e.message, e.pos),
     };
@@ -367,10 +385,13 @@ fn print_manifest(args: &[String]) -> Result<(), String> {
 }
 
 fn dump(args: &[String]) -> Result<(), String> {
-    let (_stage, _package, pkg_dir) = stage_and_package(args, &["resolve"])?;
+    let (_stage, package, pkg_dir) = stage_and_package(args, &["resolve"])?;
+    let program = manifest::program(&package)?;
     let mut dump = Dump::default();
     for file in manifest::haskell_files(&pkg_dir) {
-        let records = match read_module(&file).map(|m| aihc_resolve::resolve_module(&m)) {
+        let records = match read_module(&file)
+            .map(|_| aihc_resolve::resolve_module(&program, &file.display().to_string()))
+        {
             Ok(Ok(occurrences)) => ModuleRecords {
                 error: None,
                 occurrences,

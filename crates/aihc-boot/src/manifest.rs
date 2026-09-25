@@ -211,14 +211,10 @@ pub fn package_order(
     Ok(done)
 }
 
-/// The modules of the boot `base` whose exports are in scope in every
-/// module without an import: the list constructor `:` of `GHC.Types`.
-const BUILTIN_MODULES: &[&str] = &["GHC.Types"];
-
 /// The manifest for `tools/resolve-oracle`: the target package and its
 /// vendored dependencies, in dependency order, with their modules. Only
-/// the target's records are reported. When `base` is one of the packages,
-/// the manifest also names its builtin modules.
+/// the target's records are reported. The manifest also names the builtin
+/// modules of the packages (see [`aihc_resolve::builtin_modules`]).
 ///
 /// # Errors
 ///
@@ -227,10 +223,8 @@ pub fn manifest(target: &str) -> Result<String, String> {
     let packages = vendored_packages();
     let order = package_order(target, &packages)?;
     let mut out = String::new();
-    if order.iter().any(|name| name == "base") {
-        for module in BUILTIN_MODULES {
-            writeln!(out, "builtin {module}").unwrap();
-        }
+    for module in aihc_resolve::builtin_modules(order.iter().map(String::as_str)) {
+        writeln!(out, "builtin {module}").unwrap();
     }
     for name in order {
         let package = &packages[name.as_str()];
@@ -247,6 +241,38 @@ pub fn manifest(target: &str) -> Result<String, String> {
     }
     writeln!(out, "report {target}").unwrap();
     Ok(out)
+}
+
+/// The target package and its vendored dependencies, parsed, for the
+/// resolver. A module that does not parse is left out: it has no exports.
+///
+/// # Errors
+///
+/// See [`package_order`].
+pub fn program(target: &str) -> Result<aihc_resolve::Program, String> {
+    let packages = vendored_packages();
+    let order = package_order(target, &packages)?;
+    let builtins = aihc_resolve::builtin_modules(order.iter().map(String::as_str));
+    let mut program = aihc_resolve::Program::new(&builtins);
+    for name in &order {
+        let modules = haskell_files(&package_dir(name))
+            .into_iter()
+            .filter_map(|file| {
+                let src = std::fs::read_to_string(&file).ok()?;
+                let module = aihc_syntax::parse(&src).ok()?;
+                Some(aihc_resolve::SourceModule {
+                    path: file.display().to_string(),
+                    module,
+                })
+            })
+            .collect();
+        program.add_package(&aihc_resolve::Package {
+            name: name.clone(),
+            extensions: packages[name.as_str()].extensions.clone(),
+            modules,
+        });
+    }
+    Ok(program)
 }
 
 #[cfg(test)]

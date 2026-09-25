@@ -179,16 +179,21 @@ The Rust workspace has one crate per stage, plus the binary:
 - `crates/aihc-syntax`: lexer, layout rule, syntax tree, parser and
   printer. The parser skips nothing: a construct it does not know is a
   parse error with a position. Operator chains stay flat and in source
-  order; fixity resolution comes after name resolution. The tests
-  include one that prints and re-parses every vendored module the
-  parser accepts.
+  order; fixity resolution comes after name resolution. Every name in
+  the tree has a span. Spans do not take part in the comparison of two
+  trees. The tests include one that prints and re-parses every vendored
+  module the parser accepts.
 - `tools/aihc-parse`: the reference parser, a small driver for the
   vendored `aihc-parser`. See "Compiler interface" above.
 - `crates/aihc-resolve`: name resolution. It defines the resolution
   records, reads and writes them, and compares two resolutions of a
-  module. The resolver itself is not written yet: every module fails with
-  `resolve: not implemented yet`, so M4 reads 0 until it exists and then
-  rises on its own.
+  module. The resolver gives every identifier occurrence a target. It
+  uses the span rules of aihc-resolve, because the comparison needs the
+  same spans. The resolver handles the constructs of `base` and
+  `deepseq`. A module with another construct fails with a
+  "not supported yet" error and the position of the construct, so
+  `aihc-boot check --stage resolve --package NAME` shows which construct
+  to implement next.
 - `tools/resolve-oracle`: the reference resolver, a small program on the
   vendored `aihc-resolve`. See "Compiler interface" above.
 - `crates/aihc-boot`: the `aihc-boot` binary. It implements the command
