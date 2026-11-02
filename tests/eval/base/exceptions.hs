@@ -1,6 +1,7 @@
 -- Exceptions: throw, throwIO, catch, handle, try, evaluate, bracket,
 -- finally and onException.
 import Control.Exception
+import GHC.Num.Integer
 
 errorCall :: ErrorCall -> IO ()
 errorCall (ErrorCall m) = putStrLn ("caught: " ++ m)
@@ -34,6 +35,13 @@ main = do
   catch (print (7 `div` 0)) arith
   catch (print (7 `mod` 0)) arith
   handle anything (print (snd (quotRem 7 0)))
+  -- Integer division by zero, also with a large dividend.
+  let big = integerMul (integerFromInt 4294967296) (integerFromInt 4294967296)
+      zero = integerFromInt 0
+  catch (print (integerToInt (integerQuot (integerFromInt 7) zero))) arith
+  catch (print (integerToInt (integerDiv big zero))) arith
+  handle anything (print (integerToInt (fst (integerDivMod big zero))))
+  print (integerToInt (integerDiv (integerFromInt 7) (integerFromInt 2)))
   -- try returns the exception or the result.
   tryArith (evaluate (10 `div` 2)) >>= either arith print
   tryArith (evaluate (10 `div` 0)) >>= either arith print
