@@ -103,7 +103,7 @@ so re-vendoring a newer aihc stays cheap.
 
 The tracker talks to aihc-boot only through this command-line contract, so
 it does not depend on how aihc-boot is implemented. The command comes from
-`[compiler].command` in `boot.toml` (default `./target/release/aihc-boot`), or from
+`[compiler].command` in `boot.toml` (default `./build/aihc-boot`), or from
 the `AIHC_BOOT` environment variable. While the command does not exist,
 M3–M7 read 0.
 
@@ -162,9 +162,12 @@ M3–M7 read 0.
 
 ## Open decisions
 
-1. **Implementation language of aihc-boot: Rust.** Decided. A non-Haskell
+1. **Implementation language of aihc-boot: C89.** Decided. A non-Haskell
    implementation makes aihc-boot a real bootstrap path (no GHC needed).
-   See "Layout of the compiler" below.
+   ISO C89 is the simplest language with a compiler on almost every
+   system, so the bootstrap needs nothing more than a C compiler. The
+   first version was in Rust; the C version replaced it with the same
+   behavior. See "Layout of the compiler" below.
 2. **Code generation target for M6/M7:** C (easiest to debug, portable), a
    bytecode interpreter (smallest, and slow may be fine for a one-off
    bootstrap build), or native code.
@@ -174,42 +177,54 @@ M3–M7 read 0.
 
 ## Layout of the compiler
 
-The Rust workspace has one crate per stage, plus the binary:
+aihc-boot is written in ISO C89 (`-std=c89 -pedantic`) and uses only the
+C standard library, with one exception: `src/sys.c` wraps the POSIX
+calls for directories and child processes. The sources are in `src/`,
+one file for each stage:
 
-- `crates/aihc-syntax`: lexer, layout rule, syntax tree, parser and
-  printer. The parser skips nothing: a construct it does not know is a
+- `src/util.c`: memory, growable arrays (`Vec`), string builders
+  (`StrBuf`), strings, Unicode character classes and files.
+  `src/unicode_tables.c` holds the Unicode range tables; it comes from
+  `scripts/unicode_tables.py`.
+- `src/syntax.h`: the tokens and the syntax tree. `src/lexer.c`,
+  `src/layout.c`, `src/parse*.c` (one file for the module header,
+  declarations, expressions, patterns and types), `src/print.c` and
+  `src/debug.c` (the `aihc-boot parse` dump) implement the syntax
+  stages. The parser skips nothing: a construct it does not know is a
   parse error with a position. Operator chains stay flat and in source
   order; fixity resolution comes after name resolution. Every name in
   the tree has a span. Spans do not take part in the comparison of two
-  trees. The tests include one that prints and re-parses every vendored
-  module the parser accepts.
+  trees.
 - `tools/aihc-parse`: the reference parser, a small driver for the
   vendored `aihc-parser`. See "Compiler interface" above.
-- `crates/aihc-resolve`: name resolution. It defines the resolution
-  records, reads and writes them, and compares two resolutions of a
-  module. The resolver gives every identifier occurrence a target. It
-  uses the span rules of aihc-resolve, because the comparison needs the
-  same spans. The resolver handles the constructs of `base` and
-  `deepseq`. A module with another construct fails with a
-  "not supported yet" error and the position of the construct, so
-  `aihc-boot check --stage resolve --package NAME` shows which construct
-  to implement next.
+- `src/resolve.h` and the files it names: name resolution. They define
+  the resolution records, read and write them, and compare two
+  resolutions of a module. The resolver gives every identifier
+  occurrence a target. It uses the span rules of aihc-resolve, because
+  the comparison needs the same spans. The resolver handles the
+  constructs of `base` and `deepseq`. A module with another construct
+  fails with a "not supported yet" error and the position of the
+  construct, so `aihc-boot check --stage resolve --package NAME` shows
+  which construct to implement next.
 - `tools/resolve-oracle`: the reference resolver, a small program on the
   vendored `aihc-resolve`. See "Compiler interface" above.
-- `crates/aihc-boot`: the `aihc-boot` binary. It implements the command
-  line contract above and reports every module as JSON. Failures carry
-  an `error` field and, when known, the `line` and `col` of the first
+- `src/manifest.c`: reads the `.cabal` files under `vendor/` and writes
+  the manifest that the oracle reads.
+- `src/main.c`: the `aihc-boot` command. It implements the command line
+  contract above and reports every module as JSON. Failures carry an
+  `error` field and, when known, the `line` and `col` of the first
   error, so `aihc-boot check --stage parse --package NAME` also shows
   which construct to implement next.
 
-The crates have no third-party dependencies at present. Add a dependency
-only when it saves real work, because every crate in `Cargo.lock` is one
-more thing the Nix build has to fetch.
+aihc-boot is a short-lived process, so it does not free most of its
+memory. The tests are in `tests/`: golden files for the syntax stages
+(`tests/syntax/`), and a round trip (print, parse, print) over every
+vendored module that parses.
 
 ## Tooling
 
 - `nix develop` gives the full dev shell (Python for the scripts, GHC 9.12
-  and cabal as the reference compiler, cargo and rustc for aihc-boot). `nix develop .#tracker` is the
+  and cabal as the reference compiler, a C compiler and make for aihc-boot). `nix develop .#tracker` is the
   small shell the scheduled workflow uses.
 - `scripts/vendor.py NAME` / `--all` fetches upstream sources into
   `vendor/` and records the version and baseline size in `vendor/lock.json`.
@@ -221,11 +236,13 @@ more thing the Nix build has to fetch.
 - `scripts/progress.py` prints the report; `--write` updates the README and
   `progress/history.csv`. It records a new history row only when some number
   changed, so the daily run commits nothing on days without progress.
-- `cargo build --release` builds `target/release/aihc-boot`, the path the
-  tracker looks for. `cargo test` runs the unit tests.
-- `nix flake check` runs the tracker on a clean checkout, and builds,
-  tests, lints (`clippy`) and format-checks (`rustfmt`) the Rust
-  workspace.
+- `make` builds `build/aihc-boot`, the path the tracker looks for. Any
+  C89 compiler works: `mkdir -p build && cc -o build/aihc-boot src/*.c`
+  is enough.
+  `make check` runs the tests. `sh tests/run.sh --update` writes new
+  golden files after an intended change of output.
+- `nix flake check` runs the tracker on a clean checkout, and builds
+  and tests aihc-boot. The build uses `-Werror`, so a warning fails it.
 - The progress workflow pushes to `main` with a deploy key, because a
   ruleset cannot bypass `GITHUB_TOKEN`. To set up the key:
   1. Run `ssh-keygen -t ed25519 -N "" -C progress -f progress_key`.

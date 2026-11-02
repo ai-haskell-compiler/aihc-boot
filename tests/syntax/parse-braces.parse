@@ -1,0 +1,130 @@
+Module {
+    pos: Pos {
+        line: 1,
+        col: 1,
+    },
+    pragmas: [],
+    name: "M",
+    exports: Some(
+        [
+            Var(
+                QName {
+                    qual: "",
+                    name: "a",
+                    span: Span {
+                        start: Pos {
+                            line: 2,
+                            col: 3,
+                        },
+                        end: Pos {
+                            line: 2,
+                            col: 4,
+                        },
+                    },
+                },
+            ),
+        ],
+    ),
+    imports: [
+        Import {
+            pos: Pos {
+                line: 3,
+                col: 13,
+            },
+            module: "A",
+            qualified: No,
+            package: None,
+            alias: None,
+            hiding: false,
+            items: None,
+        },
+        Import {
+            pos: Pos {
+                line: 3,
+                col: 23,
+            },
+            module: "B",
+            qualified: No,
+            package: None,
+            alias: None,
+            hiding: false,
+            items: None,
+        },
+    ],
+    decls: [
+        TypeSig {
+            pos: Pos {
+                line: 3,
+                col: 33,
+            },
+            names: [
+                Ident {
+                    name: "x",
+                    span: Span {
+                        start: Pos {
+                            line: 3,
+                            col: 33,
+                        },
+                        end: Pos {
+                            line: 3,
+                            col: 34,
+                        },
+                    },
+                },
+            ],
+            ty: Con(
+                QName {
+                    qual: "",
+                    name: "Int",
+                    span: Span {
+                        start: Pos {
+                            line: 3,
+                            col: 38,
+                        },
+                        end: Pos {
+                            line: 3,
+                            col: 41,
+                        },
+                    },
+                },
+            ),
+        },
+        TypeSig {
+            pos: Pos {
+                line: 3,
+                col: 43,
+            },
+            names: [
+                Ident {
+                    name: "y",
+                    span: Span {
+                        start: Pos {
+                            line: 3,
+                            col: 43,
+                        },
+                        end: Pos {
+                            line: 3,
+                            col: 44,
+                        },
+                    },
+                },
+            ],
+            ty: Con(
+                QName {
+                    qual: "",
+                    name: "Int",
+                    span: Span {
+                        start: Pos {
+                            line: 3,
+                            col: 48,
+                        },
+                        end: Pos {
+                            line: 3,
+                            col: 51,
+                        },
+                    },
+                },
+            ),
+        },
+    ],
+}

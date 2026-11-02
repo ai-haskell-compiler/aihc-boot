@@ -1,0 +1,1 @@
+aihc-boot: tests/syntax/parse-error-header.hs:1:8: parse: expected a module name, found `where`

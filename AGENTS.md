@@ -71,6 +71,17 @@ Nix captures all dependencies. Builds and runs must be reproducible.
   records the version and hash.
 - Before you push, run `nix flake check`. It must pass.
 
+## Code: ISO C89
+
+Write aihc-boot in ISO C89. The Makefile compiles with
+`-std=c89 -pedantic -Wall -Wextra -Werror`.
+
+- Use only the C standard library. Put every POSIX call in `src/sys.c`.
+- Do not use `//` comments, `long long`, `inline`, `snprintf`,
+  `stdbool.h` or designated initializers.
+- Declare variables at the start of a block.
+- Run `make check` before you push. It must pass.
+
 ## Workflow
 
 - Do not edit the text between `<!-- progress:start -->` and

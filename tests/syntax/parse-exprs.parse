@@ -1,0 +1,2091 @@
+Module {
+    pos: Pos {
+        line: 1,
+        col: 1,
+    },
+    pragmas: [],
+    name: "M",
+    exports: None,
+    imports: [],
+    decls: [
+        Bind {
+            pos: Pos {
+                line: 2,
+                col: 1,
+            },
+            lhs: Fun {
+                name: Ident {
+                    name: ".",
+                    span: Span {
+                        start: Pos {
+                            line: 2,
+                            col: 1,
+                        },
+                        end: Pos {
+                            line: 2,
+                            col: 4,
+                        },
+                    },
+                },
+                args: [
+                    Var(
+                        Ident {
+                            name: "p",
+                            span: Span {
+                                start: Pos {
+                                    line: 2,
+                                    col: 5,
+                                },
+                                end: Pos {
+                                    line: 2,
+                                    col: 6,
+                                },
+                            },
+                        },
+                    ),
+                ],
+            },
+            rhs: Rhs {
+                body: Plain(
+                    Infix {
+                        first: App(
+                            Var(
+                                QName {
+                                    qual: "",
+                                    name: ".",
+                                    span: Span {
+                                        start: Pos {
+                                            line: 2,
+                                            col: 9,
+                                        },
+                                        end: Pos {
+                                            line: 2,
+                                            col: 12,
+                                        },
+                                    },
+                                },
+                            ),
+                            Var(
+                                QName {
+                                    qual: "",
+                                    name: "x",
+                                    span: Span {
+                                        start: Pos {
+                                            line: 2,
+                                            col: 13,
+                                        },
+                                        end: Pos {
+                                            line: 2,
+                                            col: 14,
+                                        },
+                                    },
+                                },
+                            ),
+                        ),
+                        rest: [
+                            (
+                                QName {
+                                    qual: "",
+                                    name: "k",
+                                    span: Span {
+                                        start: Pos {
+                                            line: 2,
+                                            col: 16,
+                                        },
+                                        end: Pos {
+                                            line: 2,
+                                            col: 17,
+                                        },
+                                    },
+                                },
+                                Var(
+                                    QName {
+                                        qual: "M",
+                                        name: "y",
+                                        span: Span {
+                                            start: Pos {
+                                                line: 2,
+                                                col: 19,
+                                            },
+                                            end: Pos {
+                                                line: 2,
+                                                col: 22,
+                                            },
+                                        },
+                                    },
+                                ),
+                            ),
+                        ],
+                    },
+                ),
+                wheres: [],
+            },
+        },
+        TypeSig {
+            pos: Pos {
+                line: 3,
+                col: 1,
+            },
+            names: [
+                Ident {
+                    name: "g",
+                    span: Span {
+                        start: Pos {
+                            line: 3,
+                            col: 1,
+                        },
+                        end: Pos {
+                            line: 3,
+                            col: 2,
+                        },
+                    },
+                },
+            ],
+            ty: Fun(
+                List(
+                    Var(
+                        Ident {
+                            name: "a",
+                            span: Span {
+                                start: Pos {
+                                    line: 3,
+                                    col: 7,
+                                },
+                                end: Pos {
+                                    line: 3,
+                                    col: 8,
+                                },
+                            },
+                        },
+                    ),
+                    Span {
+                        start: Pos {
+                            line: 3,
+                            col: 6,
+                        },
+                        end: Pos {
+                            line: 3,
+                            col: 9,
+                        },
+                    },
+                ),
+                Paren(
+                    Op(
+                        Var(
+                            Ident {
+                                name: "a",
+                                span: Span {
+                                    start: Pos {
+                                        line: 3,
+                                        col: 14,
+                                    },
+                                    end: Pos {
+                                        line: 3,
+                                        col: 15,
+                                    },
+                                },
+                            },
+                        ),
+                        QName {
+                            qual: "",
+                            name: ":+:",
+                            span: Span {
+                                start: Pos {
+                                    line: 3,
+                                    col: 16,
+                                },
+                                end: Pos {
+                                    line: 3,
+                                    col: 19,
+                                },
+                            },
+                        },
+                        Var(
+                            Ident {
+                                name: "b",
+                                span: Span {
+                                    start: Pos {
+                                        line: 3,
+                                        col: 20,
+                                    },
+                                    end: Pos {
+                                        line: 3,
+                                        col: 21,
+                                    },
+                                },
+                            },
+                        ),
+                    ),
+                    Span {
+                        start: Pos {
+                            line: 3,
+                            col: 13,
+                        },
+                        end: Pos {
+                            line: 3,
+                            col: 22,
+                        },
+                    },
+                ),
+            ),
+        },
+        Bind {
+            pos: Pos {
+                line: 4,
+                col: 1,
+            },
+            lhs: Fun {
+                name: Ident {
+                    name: "e",
+                    span: Span {
+                        start: Pos {
+                            line: 4,
+                            col: 1,
+                        },
+                        end: Pos {
+                            line: 4,
+                            col: 2,
+                        },
+                    },
+                },
+                args: [],
+            },
+            rhs: Rhs {
+                body: Plain(
+                    Lambda(
+                        [
+                            Var(
+                                Ident {
+                                    name: "x",
+                                    span: Span {
+                                        start: Pos {
+                                            line: 4,
+                                            col: 6,
+                                        },
+                                        end: Pos {
+                                            line: 4,
+                                            col: 7,
+                                        },
+                                    },
+                                },
+                            ),
+                            Tuple(
+                                [
+                                    Var(
+                                        Ident {
+                                            name: "y",
+                                            span: Span {
+                                                start: Pos {
+                                                    line: 4,
+                                                    col: 9,
+                                                },
+                                                end: Pos {
+                                                    line: 4,
+                                                    col: 10,
+                                                },
+                                            },
+                                        },
+                                    ),
+                                    Var(
+                                        Ident {
+                                            name: "z",
+                                            span: Span {
+                                                start: Pos {
+                                                    line: 4,
+                                                    col: 12,
+                                                },
+                                                end: Pos {
+                                                    line: 4,
+                                                    col: 13,
+                                                },
+                                            },
+                                        },
+                                    ),
+                                ],
+                            ),
+                        ],
+                        Case(
+                            Var(
+                                QName {
+                                    qual: "",
+                                    name: "x",
+                                    span: Span {
+                                        start: Pos {
+                                            line: 4,
+                                            col: 23,
+                                        },
+                                        end: Pos {
+                                            line: 4,
+                                            col: 24,
+                                        },
+                                    },
+                                },
+                            ),
+                            [
+                                Alt {
+                                    pos: Pos {
+                                        line: 5,
+                                        col: 3,
+                                    },
+                                    pat: Con {
+                                        name: QName {
+                                            qual: "",
+                                            name: "Just",
+                                            span: Span {
+                                                start: Pos {
+                                                    line: 5,
+                                                    col: 3,
+                                                },
+                                                end: Pos {
+                                                    line: 5,
+                                                    col: 7,
+                                                },
+                                            },
+                                        },
+                                        args: [
+                                            Var(
+                                                Ident {
+                                                    name: "a",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 5,
+                                                            col: 8,
+                                                        },
+                                                        end: Pos {
+                                                            line: 5,
+                                                            col: 9,
+                                                        },
+                                                    },
+                                                },
+                                            ),
+                                        ],
+                                    },
+                                    rhs: Rhs {
+                                        body: Guarded(
+                                            [
+                                                GuardedRhs {
+                                                    guards: [
+                                                        Expr(
+                                                            Infix {
+                                                                first: Var(
+                                                                    QName {
+                                                                        qual: "",
+                                                                        name: "a",
+                                                                        span: Span {
+                                                                            start: Pos {
+                                                                                line: 5,
+                                                                                col: 12,
+                                                                            },
+                                                                            end: Pos {
+                                                                                line: 5,
+                                                                                col: 13,
+                                                                            },
+                                                                        },
+                                                                    },
+                                                                ),
+                                                                rest: [
+                                                                    (
+                                                                        QName {
+                                                                            qual: "",
+                                                                            name: ">",
+                                                                            span: Span {
+                                                                                start: Pos {
+                                                                                    line: 5,
+                                                                                    col: 14,
+                                                                                },
+                                                                                end: Pos {
+                                                                                    line: 5,
+                                                                                    col: 15,
+                                                                                },
+                                                                            },
+                                                                        },
+                                                                        Lit(
+                                                                            Integer(
+                                                                                "0",
+                                                                            ),
+                                                                        ),
+                                                                    ),
+                                                                ],
+                                                            },
+                                                        ),
+                                                    ],
+                                                    body: Var(
+                                                        QName {
+                                                            qual: "",
+                                                            name: "a",
+                                                            span: Span {
+                                                                start: Pos {
+                                                                    line: 5,
+                                                                    col: 21,
+                                                                },
+                                                                end: Pos {
+                                                                    line: 5,
+                                                                    col: 22,
+                                                                },
+                                                            },
+                                                        },
+                                                    ),
+                                                },
+                                                GuardedRhs {
+                                                    guards: [
+                                                        Expr(
+                                                            Var(
+                                                                QName {
+                                                                    qual: "",
+                                                                    name: "otherwise",
+                                                                    span: Span {
+                                                                        start: Pos {
+                                                                            line: 6,
+                                                                            col: 12,
+                                                                        },
+                                                                        end: Pos {
+                                                                            line: 6,
+                                                                            col: 21,
+                                                                        },
+                                                                    },
+                                                                },
+                                                            ),
+                                                        ),
+                                                    ],
+                                                    body: App(
+                                                        Var(
+                                                            QName {
+                                                                qual: "",
+                                                                name: "negate",
+                                                                span: Span {
+                                                                    start: Pos {
+                                                                        line: 6,
+                                                                        col: 25,
+                                                                    },
+                                                                    end: Pos {
+                                                                        line: 6,
+                                                                        col: 31,
+                                                                    },
+                                                                },
+                                                            },
+                                                        ),
+                                                        Var(
+                                                            QName {
+                                                                qual: "",
+                                                                name: "a",
+                                                                span: Span {
+                                                                    start: Pos {
+                                                                        line: 6,
+                                                                        col: 32,
+                                                                    },
+                                                                    end: Pos {
+                                                                        line: 6,
+                                                                        col: 33,
+                                                                    },
+                                                                },
+                                                            },
+                                                        ),
+                                                    ),
+                                                },
+                                            ],
+                                        ),
+                                        wheres: [],
+                                    },
+                                },
+                                Alt {
+                                    pos: Pos {
+                                        line: 7,
+                                        col: 3,
+                                    },
+                                    pat: Wildcard,
+                                    rhs: Rhs {
+                                        body: Plain(
+                                            Neg(
+                                                Lit(
+                                                    Integer(
+                                                        "1",
+                                                    ),
+                                                ),
+                                            ),
+                                        ),
+                                        wheres: [],
+                                    },
+                                },
+                            ],
+                        ),
+                    ),
+                ),
+                wheres: [],
+            },
+        },
+        Bind {
+            pos: Pos {
+                line: 8,
+                col: 1,
+            },
+            lhs: Fun {
+                name: Ident {
+                    name: "h",
+                    span: Span {
+                        start: Pos {
+                            line: 8,
+                            col: 1,
+                        },
+                        end: Pos {
+                            line: 8,
+                            col: 2,
+                        },
+                    },
+                },
+                args: [],
+            },
+            rhs: Rhs {
+                body: Plain(
+                    Do(
+                        [
+                            Bind(
+                                Var(
+                                    Ident {
+                                        name: "x",
+                                        span: Span {
+                                            start: Pos {
+                                                line: 9,
+                                                col: 3,
+                                            },
+                                            end: Pos {
+                                                line: 9,
+                                                col: 4,
+                                            },
+                                        },
+                                    },
+                                ),
+                                App(
+                                    App(
+                                        App(
+                                            TypeApp(
+                                                Var(
+                                                    QName {
+                                                        qual: "",
+                                                        name: "f",
+                                                        span: Span {
+                                                            start: Pos {
+                                                                line: 9,
+                                                                col: 8,
+                                                            },
+                                                            end: Pos {
+                                                                line: 9,
+                                                                col: 9,
+                                                            },
+                                                        },
+                                                    },
+                                                ),
+                                                Con(
+                                                    QName {
+                                                        qual: "",
+                                                        name: "Int",
+                                                        span: Span {
+                                                            start: Pos {
+                                                                line: 9,
+                                                                col: 11,
+                                                            },
+                                                            end: Pos {
+                                                                line: 9,
+                                                                col: 14,
+                                                            },
+                                                        },
+                                                    },
+                                                ),
+                                            ),
+                                            Lit(
+                                                Char {
+                                                    value: 'c',
+                                                    raw: "'c'",
+                                                },
+                                            ),
+                                        ),
+                                        Lit(
+                                            String {
+                                                value: "s\n",
+                                                raw: "\"s\\n\"",
+                                            },
+                                        ),
+                                    ),
+                                    Lit(
+                                        Float(
+                                            "1.5e3",
+                                        ),
+                                    ),
+                                ),
+                            ),
+                            Let(
+                                [
+                                    Bind {
+                                        pos: Pos {
+                                            line: 10,
+                                            col: 7,
+                                        },
+                                        lhs: Fun {
+                                            name: Ident {
+                                                name: "y",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 10,
+                                                        col: 7,
+                                                    },
+                                                    end: Pos {
+                                                        line: 10,
+                                                        col: 8,
+                                                    },
+                                                },
+                                            },
+                                            args: [],
+                                        },
+                                        rhs: Rhs {
+                                            body: Plain(
+                                                Var(
+                                                    QName {
+                                                        qual: "",
+                                                        name: "x",
+                                                        span: Span {
+                                                            start: Pos {
+                                                                line: 10,
+                                                                col: 11,
+                                                            },
+                                                            end: Pos {
+                                                                line: 10,
+                                                                col: 12,
+                                                            },
+                                                        },
+                                                    },
+                                                ),
+                                            ),
+                                            wheres: [],
+                                        },
+                                    },
+                                ],
+                            ),
+                            Bind(
+                                Record {
+                                    name: QName {
+                                        qual: "",
+                                        name: "Rec",
+                                        span: Span {
+                                            start: Pos {
+                                                line: 11,
+                                                col: 3,
+                                            },
+                                            end: Pos {
+                                                line: 11,
+                                                col: 6,
+                                            },
+                                        },
+                                    },
+                                    fields: [
+                                        FieldPat {
+                                            name: QName {
+                                                qual: "",
+                                                name: "a",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 11,
+                                                        col: 9,
+                                                    },
+                                                    end: Pos {
+                                                        line: 11,
+                                                        col: 10,
+                                                    },
+                                                },
+                                            },
+                                            pat: Some(
+                                                Lit {
+                                                    lit: Integer(
+                                                        "1",
+                                                    ),
+                                                    negative: false,
+                                                },
+                                            ),
+                                        },
+                                        FieldPat {
+                                            name: QName {
+                                                qual: "",
+                                                name: "b",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 11,
+                                                        col: 16,
+                                                    },
+                                                    end: Pos {
+                                                        line: 11,
+                                                        col: 17,
+                                                    },
+                                                },
+                                            },
+                                            pat: None,
+                                        },
+                                    ],
+                                    wildcard: false,
+                                },
+                                App(
+                                    Var(
+                                        QName {
+                                            qual: "",
+                                            name: "pure",
+                                            span: Span {
+                                                start: Pos {
+                                                    line: 11,
+                                                    col: 23,
+                                                },
+                                                end: Pos {
+                                                    line: 11,
+                                                    col: 27,
+                                                },
+                                            },
+                                        },
+                                    ),
+                                    Paren(
+                                        Sig(
+                                            Var(
+                                                QName {
+                                                    qual: "",
+                                                    name: "x",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 11,
+                                                            col: 29,
+                                                        },
+                                                        end: Pos {
+                                                            line: 11,
+                                                            col: 30,
+                                                        },
+                                                    },
+                                                },
+                                            ),
+                                            Con(
+                                                QName {
+                                                    qual: "",
+                                                    name: "Int",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 11,
+                                                            col: 34,
+                                                        },
+                                                        end: Pos {
+                                                            line: 11,
+                                                            col: 37,
+                                                        },
+                                                    },
+                                                },
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                            Expr(
+                                Infix {
+                                    first: Var(
+                                        QName {
+                                            qual: "",
+                                            name: "pure",
+                                            span: Span {
+                                                start: Pos {
+                                                    line: 12,
+                                                    col: 3,
+                                                },
+                                                end: Pos {
+                                                    line: 12,
+                                                    col: 7,
+                                                },
+                                            },
+                                        },
+                                    ),
+                                    rest: [
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "$",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 12,
+                                                        col: 8,
+                                                    },
+                                                    end: Pos {
+                                                        line: 12,
+                                                        col: 9,
+                                                    },
+                                                },
+                                            },
+                                            App(
+                                                App(
+                                                    Con(
+                                                        QName {
+                                                            qual: "",
+                                                            name: "(,)",
+                                                            span: Span {
+                                                                start: Pos {
+                                                                    line: 12,
+                                                                    col: 10,
+                                                                },
+                                                                end: Pos {
+                                                                    line: 12,
+                                                                    col: 13,
+                                                                },
+                                                            },
+                                                        },
+                                                    ),
+                                                    Var(
+                                                        QName {
+                                                            qual: "",
+                                                            name: "x",
+                                                            span: Span {
+                                                                start: Pos {
+                                                                    line: 12,
+                                                                    col: 14,
+                                                                },
+                                                                end: Pos {
+                                                                    line: 12,
+                                                                    col: 15,
+                                                                },
+                                                            },
+                                                        },
+                                                    ),
+                                                ),
+                                                Var(
+                                                    QName {
+                                                        qual: "",
+                                                        name: "y",
+                                                        span: Span {
+                                                            start: Pos {
+                                                                line: 12,
+                                                                col: 16,
+                                                            },
+                                                            end: Pos {
+                                                                line: 12,
+                                                                col: 17,
+                                                            },
+                                                        },
+                                                    },
+                                                ),
+                                            ),
+                                        ),
+                                    ],
+                                },
+                            ),
+                            Bind(
+                                Lazy(
+                                    Tuple(
+                                        [
+                                            Var(
+                                                Ident {
+                                                    name: "a",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 13,
+                                                            col: 5,
+                                                        },
+                                                        end: Pos {
+                                                            line: 13,
+                                                            col: 6,
+                                                        },
+                                                    },
+                                                },
+                                            ),
+                                            Bang(
+                                                Var(
+                                                    Ident {
+                                                        name: "b",
+                                                        span: Span {
+                                                            start: Pos {
+                                                                line: 13,
+                                                                col: 9,
+                                                            },
+                                                            end: Pos {
+                                                                line: 13,
+                                                                col: 10,
+                                                            },
+                                                        },
+                                                    },
+                                                ),
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                                Var(
+                                    QName {
+                                        qual: "",
+                                        name: "m",
+                                        span: Span {
+                                            start: Pos {
+                                                line: 13,
+                                                col: 15,
+                                            },
+                                            end: Pos {
+                                                line: 13,
+                                                col: 16,
+                                            },
+                                        },
+                                    },
+                                ),
+                            ),
+                            Bind(
+                                List(
+                                    [
+                                        Var(
+                                            Ident {
+                                                name: "p",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 14,
+                                                        col: 4,
+                                                    },
+                                                    end: Pos {
+                                                        line: 14,
+                                                        col: 5,
+                                                    },
+                                                },
+                                            },
+                                        ),
+                                        Var(
+                                            Ident {
+                                                name: "q",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 14,
+                                                        col: 7,
+                                                    },
+                                                    end: Pos {
+                                                        line: 14,
+                                                        col: 8,
+                                                    },
+                                                },
+                                            },
+                                        ),
+                                    ],
+                                ),
+                                Infix {
+                                    first: RightSection(
+                                        QName {
+                                            qual: "",
+                                            name: "div",
+                                            span: Span {
+                                                start: Pos {
+                                                    line: 14,
+                                                    col: 15,
+                                                },
+                                                end: Pos {
+                                                    line: 14,
+                                                    col: 18,
+                                                },
+                                            },
+                                        },
+                                        Lit(
+                                            Integer(
+                                                "2",
+                                            ),
+                                        ),
+                                    ),
+                                    rest: [
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "<$>",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 14,
+                                                        col: 23,
+                                                    },
+                                                    end: Pos {
+                                                        line: 14,
+                                                        col: 26,
+                                                    },
+                                                },
+                                            },
+                                            LeftSection(
+                                                Lit(
+                                                    Integer(
+                                                        "2",
+                                                    ),
+                                                ),
+                                                QName {
+                                                    qual: "",
+                                                    name: "-",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 14,
+                                                            col: 30,
+                                                        },
+                                                        end: Pos {
+                                                            line: 14,
+                                                            col: 31,
+                                                        },
+                                                    },
+                                                },
+                                            ),
+                                        ),
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "<$>",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 14,
+                                                        col: 33,
+                                                    },
+                                                    end: Pos {
+                                                        line: 14,
+                                                        col: 36,
+                                                    },
+                                                },
+                                            },
+                                            RightSection(
+                                                QName {
+                                                    qual: "",
+                                                    name: "+",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 14,
+                                                            col: 38,
+                                                        },
+                                                        end: Pos {
+                                                            line: 14,
+                                                            col: 39,
+                                                        },
+                                                    },
+                                                },
+                                                Lit(
+                                                    Integer(
+                                                        "1",
+                                                    ),
+                                                ),
+                                            ),
+                                        ),
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "<$>",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 14,
+                                                        col: 43,
+                                                    },
+                                                    end: Pos {
+                                                        line: 14,
+                                                        col: 46,
+                                                    },
+                                                },
+                                            },
+                                            LeftSection(
+                                                Var(
+                                                    QName {
+                                                        qual: "",
+                                                        name: "x",
+                                                        span: Span {
+                                                            start: Pos {
+                                                                line: 14,
+                                                                col: 48,
+                                                            },
+                                                            end: Pos {
+                                                                line: 14,
+                                                                col: 49,
+                                                            },
+                                                        },
+                                                    },
+                                                ),
+                                                QName {
+                                                    qual: "",
+                                                    name: "+",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 14,
+                                                            col: 50,
+                                                        },
+                                                        end: Pos {
+                                                            line: 14,
+                                                            col: 51,
+                                                        },
+                                                    },
+                                                },
+                                            ),
+                                        ),
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "<$>",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 14,
+                                                        col: 53,
+                                                    },
+                                                    end: Pos {
+                                                        line: 14,
+                                                        col: 56,
+                                                    },
+                                                },
+                                            },
+                                            TupleSection(
+                                                [
+                                                    None,
+                                                    Some(
+                                                        Lit(
+                                                            Integer(
+                                                                "1",
+                                                            ),
+                                                        ),
+                                                    ),
+                                                ],
+                                            ),
+                                        ),
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "<$>",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 14,
+                                                        col: 63,
+                                                    },
+                                                    end: Pos {
+                                                        line: 14,
+                                                        col: 66,
+                                                    },
+                                                },
+                                            },
+                                            TupleSection(
+                                                [
+                                                    Some(
+                                                        Lit(
+                                                            Integer(
+                                                                "1",
+                                                            ),
+                                                        ),
+                                                    ),
+                                                    None,
+                                                ],
+                                            ),
+                                        ),
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "<$>",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 14,
+                                                        col: 73,
+                                                    },
+                                                    end: Pos {
+                                                        line: 14,
+                                                        col: 76,
+                                                    },
+                                                },
+                                            },
+                                            Var(
+                                                QName {
+                                                    qual: "",
+                                                    name: "n",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 14,
+                                                            col: 77,
+                                                        },
+                                                        end: Pos {
+                                                            line: 14,
+                                                            col: 78,
+                                                        },
+                                                    },
+                                                },
+                                            ),
+                                        ),
+                                    ],
+                                },
+                            ),
+                            Expr(
+                                Infix {
+                                    first: RecordUpdate(
+                                        Var(
+                                            QName {
+                                                qual: "",
+                                                name: "r",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 15,
+                                                        col: 3,
+                                                    },
+                                                    end: Pos {
+                                                        line: 15,
+                                                        col: 4,
+                                                    },
+                                                },
+                                            },
+                                        ),
+                                        [
+                                            FieldUpdate {
+                                                name: QName {
+                                                    qual: "",
+                                                    name: "field",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 15,
+                                                            col: 7,
+                                                        },
+                                                        end: Pos {
+                                                            line: 15,
+                                                            col: 12,
+                                                        },
+                                                    },
+                                                },
+                                                value: Some(
+                                                    Lit(
+                                                        Integer(
+                                                            "1",
+                                                        ),
+                                                    ),
+                                                ),
+                                            },
+                                        ],
+                                    ),
+                                    rest: [
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "seq",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 15,
+                                                        col: 20,
+                                                    },
+                                                    end: Pos {
+                                                        line: 15,
+                                                        col: 23,
+                                                    },
+                                                },
+                                            },
+                                            RecordCon {
+                                                name: QName {
+                                                    qual: "",
+                                                    name: "C",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 15,
+                                                            col: 25,
+                                                        },
+                                                        end: Pos {
+                                                            line: 15,
+                                                            col: 26,
+                                                        },
+                                                    },
+                                                },
+                                                fields: [],
+                                                wildcard: true,
+                                            },
+                                        ),
+                                    ],
+                                },
+                            ),
+                            Expr(
+                                If(
+                                    Var(
+                                        QName {
+                                            qual: "",
+                                            name: "a",
+                                            span: Span {
+                                                start: Pos {
+                                                    line: 16,
+                                                    col: 6,
+                                                },
+                                                end: Pos {
+                                                    line: 16,
+                                                    col: 7,
+                                                },
+                                            },
+                                        },
+                                    ),
+                                    Var(
+                                        QName {
+                                            qual: "",
+                                            name: "b",
+                                            span: Span {
+                                                start: Pos {
+                                                    line: 16,
+                                                    col: 13,
+                                                },
+                                                end: Pos {
+                                                    line: 16,
+                                                    col: 14,
+                                                },
+                                            },
+                                        },
+                                    ),
+                                    Var(
+                                        QName {
+                                            qual: "",
+                                            name: "c",
+                                            span: Span {
+                                                start: Pos {
+                                                    line: 16,
+                                                    col: 20,
+                                                },
+                                                end: Pos {
+                                                    line: 16,
+                                                    col: 21,
+                                                },
+                                            },
+                                        },
+                                    ),
+                                ),
+                            ),
+                            Expr(
+                                Let(
+                                    [
+                                        Bind {
+                                            pos: Pos {
+                                                line: 17,
+                                                col: 7,
+                                            },
+                                            lhs: Fun {
+                                                name: Ident {
+                                                    name: "z",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 17,
+                                                            col: 7,
+                                                        },
+                                                        end: Pos {
+                                                            line: 17,
+                                                            col: 8,
+                                                        },
+                                                    },
+                                                },
+                                                args: [],
+                                            },
+                                            rhs: Rhs {
+                                                body: Plain(
+                                                    Lit(
+                                                        Integer(
+                                                            "1",
+                                                        ),
+                                                    ),
+                                                ),
+                                                wheres: [],
+                                            },
+                                        },
+                                    ],
+                                    Infix {
+                                        first: Var(
+                                            QName {
+                                                qual: "",
+                                                name: "z",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 17,
+                                                        col: 16,
+                                                    },
+                                                    end: Pos {
+                                                        line: 17,
+                                                        col: 17,
+                                                    },
+                                                },
+                                            },
+                                        ),
+                                        rest: [
+                                            (
+                                                QName {
+                                                    qual: "",
+                                                    name: "+",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 17,
+                                                            col: 18,
+                                                        },
+                                                        end: Pos {
+                                                            line: 17,
+                                                            col: 19,
+                                                        },
+                                                    },
+                                                },
+                                                Lit(
+                                                    Integer(
+                                                        "1",
+                                                    ),
+                                                ),
+                                            ),
+                                        ],
+                                    },
+                                ),
+                            ),
+                        ],
+                    ),
+                ),
+                wheres: [
+                    Bind {
+                        pos: Pos {
+                            line: 19,
+                            col: 5,
+                        },
+                        lhs: Fun {
+                            name: Ident {
+                                name: "k",
+                                span: Span {
+                                    start: Pos {
+                                        line: 19,
+                                        col: 5,
+                                    },
+                                    end: Pos {
+                                        line: 19,
+                                        col: 6,
+                                    },
+                                },
+                            },
+                            args: [],
+                        },
+                        rhs: Rhs {
+                            body: Plain(
+                                Infix {
+                                    first: ArithSeq {
+                                        from: Lit(
+                                            Integer(
+                                                "1",
+                                            ),
+                                        ),
+                                        then: None,
+                                        to: None,
+                                    },
+                                    rest: [
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "++",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 19,
+                                                        col: 16,
+                                                    },
+                                                    end: Pos {
+                                                        line: 19,
+                                                        col: 18,
+                                                    },
+                                                },
+                                            },
+                                            ArithSeq {
+                                                from: Lit(
+                                                    Integer(
+                                                        "1",
+                                                    ),
+                                                ),
+                                                then: Some(
+                                                    Lit(
+                                                        Integer(
+                                                            "3",
+                                                        ),
+                                                    ),
+                                                ),
+                                                to: None,
+                                            },
+                                        ),
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "++",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 19,
+                                                        col: 29,
+                                                    },
+                                                    end: Pos {
+                                                        line: 19,
+                                                        col: 31,
+                                                    },
+                                                },
+                                            },
+                                            ArithSeq {
+                                                from: Lit(
+                                                    Integer(
+                                                        "1",
+                                                    ),
+                                                ),
+                                                then: None,
+                                                to: Some(
+                                                    Lit(
+                                                        Integer(
+                                                            "9",
+                                                        ),
+                                                    ),
+                                                ),
+                                            },
+                                        ),
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "++",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 19,
+                                                        col: 41,
+                                                    },
+                                                    end: Pos {
+                                                        line: 19,
+                                                        col: 43,
+                                                    },
+                                                },
+                                            },
+                                            ArithSeq {
+                                                from: Lit(
+                                                    Integer(
+                                                        "1",
+                                                    ),
+                                                ),
+                                                then: Some(
+                                                    Lit(
+                                                        Integer(
+                                                            "3",
+                                                        ),
+                                                    ),
+                                                ),
+                                                to: Some(
+                                                    Lit(
+                                                        Integer(
+                                                            "9",
+                                                        ),
+                                                    ),
+                                                ),
+                                            },
+                                        ),
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "++",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 19,
+                                                        col: 56,
+                                                    },
+                                                    end: Pos {
+                                                        line: 19,
+                                                        col: 58,
+                                                    },
+                                                },
+                                            },
+                                            ListComp(
+                                                Var(
+                                                    QName {
+                                                        qual: "",
+                                                        name: "x",
+                                                        span: Span {
+                                                            start: Pos {
+                                                                line: 19,
+                                                                col: 60,
+                                                            },
+                                                            end: Pos {
+                                                                line: 19,
+                                                                col: 61,
+                                                            },
+                                                        },
+                                                    },
+                                                ),
+                                                [
+                                                    Bind(
+                                                        Var(
+                                                            Ident {
+                                                                name: "x",
+                                                                span: Span {
+                                                                    start: Pos {
+                                                                        line: 19,
+                                                                        col: 64,
+                                                                    },
+                                                                    end: Pos {
+                                                                        line: 19,
+                                                                        col: 65,
+                                                                    },
+                                                                },
+                                                            },
+                                                        ),
+                                                        Var(
+                                                            QName {
+                                                                qual: "",
+                                                                name: "xs",
+                                                                span: Span {
+                                                                    start: Pos {
+                                                                        line: 19,
+                                                                        col: 69,
+                                                                    },
+                                                                    end: Pos {
+                                                                        line: 19,
+                                                                        col: 71,
+                                                                    },
+                                                                },
+                                                            },
+                                                        ),
+                                                    ),
+                                                    Expr(
+                                                        App(
+                                                            Var(
+                                                                QName {
+                                                                    qual: "",
+                                                                    name: "odd",
+                                                                    span: Span {
+                                                                        start: Pos {
+                                                                            line: 19,
+                                                                            col: 73,
+                                                                        },
+                                                                        end: Pos {
+                                                                            line: 19,
+                                                                            col: 76,
+                                                                        },
+                                                                    },
+                                                                },
+                                                            ),
+                                                            Var(
+                                                                QName {
+                                                                    qual: "",
+                                                                    name: "x",
+                                                                    span: Span {
+                                                                        start: Pos {
+                                                                            line: 19,
+                                                                            col: 77,
+                                                                        },
+                                                                        end: Pos {
+                                                                            line: 19,
+                                                                            col: 78,
+                                                                        },
+                                                                    },
+                                                                },
+                                                            ),
+                                                        ),
+                                                    ),
+                                                ],
+                                            ),
+                                        ),
+                                        (
+                                            QName {
+                                                qual: "",
+                                                name: "++",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 19,
+                                                        col: 80,
+                                                    },
+                                                    end: Pos {
+                                                        line: 19,
+                                                        col: 82,
+                                                    },
+                                                },
+                                            },
+                                            Con(
+                                                QName {
+                                                    qual: "",
+                                                    name: "[]",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 19,
+                                                            col: 83,
+                                                        },
+                                                        end: Pos {
+                                                            line: 19,
+                                                            col: 85,
+                                                        },
+                                                    },
+                                                },
+                                            ),
+                                        ),
+                                    ],
+                                },
+                            ),
+                            wheres: [],
+                        },
+                    },
+                    Bind {
+                        pos: Pos {
+                            line: 20,
+                            col: 5,
+                        },
+                        lhs: Fun {
+                            name: Ident {
+                                name: "l",
+                                span: Span {
+                                    start: Pos {
+                                        line: 20,
+                                        col: 5,
+                                    },
+                                    end: Pos {
+                                        line: 20,
+                                        col: 6,
+                                    },
+                                },
+                            },
+                            args: [],
+                        },
+                        rhs: Rhs {
+                            body: Plain(
+                                LambdaCase(
+                                    [
+                                        Alt {
+                                            pos: Pos {
+                                                line: 20,
+                                                col: 17,
+                                            },
+                                            pat: Con {
+                                                name: QName {
+                                                    qual: "",
+                                                    name: "A",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 20,
+                                                            col: 17,
+                                                        },
+                                                        end: Pos {
+                                                            line: 20,
+                                                            col: 18,
+                                                        },
+                                                    },
+                                                },
+                                                args: [],
+                                            },
+                                            rhs: Rhs {
+                                                body: Plain(
+                                                    Con(
+                                                        QName {
+                                                            qual: "",
+                                                            name: "()",
+                                                            span: Span {
+                                                                start: Pos {
+                                                                    line: 20,
+                                                                    col: 22,
+                                                                },
+                                                                end: Pos {
+                                                                    line: 20,
+                                                                    col: 24,
+                                                                },
+                                                            },
+                                                        },
+                                                    ),
+                                                ),
+                                                wheres: [],
+                                            },
+                                        },
+                                        Alt {
+                                            pos: Pos {
+                                                line: 20,
+                                                col: 26,
+                                            },
+                                            pat: As(
+                                                Ident {
+                                                    name: "b",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 20,
+                                                            col: 26,
+                                                        },
+                                                        end: Pos {
+                                                            line: 20,
+                                                            col: 27,
+                                                        },
+                                                    },
+                                                },
+                                                Paren(
+                                                    Con {
+                                                        name: QName {
+                                                            qual: "",
+                                                            name: "C",
+                                                            span: Span {
+                                                                start: Pos {
+                                                                    line: 20,
+                                                                    col: 29,
+                                                                },
+                                                                end: Pos {
+                                                                    line: 20,
+                                                                    col: 30,
+                                                                },
+                                                            },
+                                                        },
+                                                        args: [
+                                                            Wildcard,
+                                                            Paren(
+                                                                View(
+                                                                    Con(
+                                                                        QName {
+                                                                            qual: "",
+                                                                            name: "D",
+                                                                            span: Span {
+                                                                                start: Pos {
+                                                                                    line: 20,
+                                                                                    col: 34,
+                                                                                },
+                                                                                end: Pos {
+                                                                                    line: 20,
+                                                                                    col: 35,
+                                                                                },
+                                                                            },
+                                                                        },
+                                                                    ),
+                                                                    Con {
+                                                                        name: QName {
+                                                                            qual: "",
+                                                                            name: "E",
+                                                                            span: Span {
+                                                                                start: Pos {
+                                                                                    line: 20,
+                                                                                    col: 39,
+                                                                                },
+                                                                                end: Pos {
+                                                                                    line: 20,
+                                                                                    col: 40,
+                                                                                },
+                                                                            },
+                                                                        },
+                                                                        args: [],
+                                                                    },
+                                                                ),
+                                                            ),
+                                                        ],
+                                                    },
+                                                ),
+                                            ),
+                                            rhs: Rhs {
+                                                body: Plain(
+                                                    Con(
+                                                        QName {
+                                                            qual: "",
+                                                            name: "()",
+                                                            span: Span {
+                                                                start: Pos {
+                                                                    line: 20,
+                                                                    col: 46,
+                                                                },
+                                                                end: Pos {
+                                                                    line: 20,
+                                                                    col: 48,
+                                                                },
+                                                            },
+                                                        },
+                                                    ),
+                                                ),
+                                                wheres: [],
+                                            },
+                                        },
+                                    ],
+                                ),
+                            ),
+                            wheres: [],
+                        },
+                    },
+                    Bind {
+                        pos: Pos {
+                            line: 21,
+                            col: 5,
+                        },
+                        lhs: Fun {
+                            name: Ident {
+                                name: "m",
+                                span: Span {
+                                    start: Pos {
+                                        line: 21,
+                                        col: 5,
+                                    },
+                                    end: Pos {
+                                        line: 21,
+                                        col: 6,
+                                    },
+                                },
+                            },
+                            args: [
+                                Paren(
+                                    Sig(
+                                        Var(
+                                            Ident {
+                                                name: "n",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 21,
+                                                        col: 8,
+                                                    },
+                                                    end: Pos {
+                                                        line: 21,
+                                                        col: 9,
+                                                    },
+                                                },
+                                            },
+                                        ),
+                                        Con(
+                                            QName {
+                                                qual: "",
+                                                name: "Int",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 21,
+                                                        col: 13,
+                                                    },
+                                                    end: Pos {
+                                                        line: 21,
+                                                        col: 16,
+                                                    },
+                                                },
+                                            },
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                        rhs: Rhs {
+                            body: Plain(
+                                Let(
+                                    [
+                                        Bind {
+                                            pos: Pos {
+                                                line: 21,
+                                                col: 26,
+                                            },
+                                            lhs: Fun {
+                                                name: Ident {
+                                                    name: "o",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 21,
+                                                            col: 26,
+                                                        },
+                                                        end: Pos {
+                                                            line: 21,
+                                                            col: 27,
+                                                        },
+                                                    },
+                                                },
+                                                args: [],
+                                            },
+                                            rhs: Rhs {
+                                                body: Plain(
+                                                    Lit(
+                                                        Integer(
+                                                            "1",
+                                                        ),
+                                                    ),
+                                                ),
+                                                wheres: [],
+                                            },
+                                        },
+                                    ],
+                                    Var(
+                                        QName {
+                                            qual: "",
+                                            name: "o",
+                                            span: Span {
+                                                start: Pos {
+                                                    line: 21,
+                                                    col: 37,
+                                                },
+                                                end: Pos {
+                                                    line: 21,
+                                                    col: 38,
+                                                },
+                                            },
+                                        },
+                                    ),
+                                ),
+                            ),
+                            wheres: [],
+                        },
+                    },
+                    Bind {
+                        pos: Pos {
+                            line: 22,
+                            col: 5,
+                        },
+                        lhs: Pat(
+                            Wildcard,
+                        ),
+                        rhs: Rhs {
+                            body: Plain(
+                                Tuple(
+                                    [
+                                        App(
+                                            App(
+                                                Con(
+                                                    QName {
+                                                        qual: "",
+                                                        name: ":",
+                                                        span: Span {
+                                                            start: Pos {
+                                                                line: 22,
+                                                                col: 10,
+                                                            },
+                                                            end: Pos {
+                                                                line: 22,
+                                                                col: 13,
+                                                            },
+                                                        },
+                                                    },
+                                                ),
+                                                Lit(
+                                                    Integer(
+                                                        "1",
+                                                    ),
+                                                ),
+                                            ),
+                                            Con(
+                                                QName {
+                                                    qual: "",
+                                                    name: "[]",
+                                                    span: Span {
+                                                        start: Pos {
+                                                            line: 22,
+                                                            col: 16,
+                                                        },
+                                                        end: Pos {
+                                                            line: 22,
+                                                            col: 18,
+                                                        },
+                                                    },
+                                                },
+                                            ),
+                                        ),
+                                        Con(
+                                            QName {
+                                                qual: "",
+                                                name: ":|",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 22,
+                                                        col: 20,
+                                                    },
+                                                    end: Pos {
+                                                        line: 22,
+                                                        col: 24,
+                                                    },
+                                                },
+                                            },
+                                        ),
+                                        Con(
+                                            QName {
+                                                qual: "",
+                                                name: "(,,)",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 22,
+                                                        col: 26,
+                                                    },
+                                                    end: Pos {
+                                                        line: 22,
+                                                        col: 30,
+                                                    },
+                                                },
+                                            },
+                                        ),
+                                        Var(
+                                            QName {
+                                                qual: "M",
+                                                name: "x",
+                                                span: Span {
+                                                    start: Pos {
+                                                        line: 22,
+                                                        col: 32,
+                                                    },
+                                                    end: Pos {
+                                                        line: 22,
+                                                        col: 35,
+                                                    },
+                                                },
+                                            },
+                                        ),
+                                        Hole,
+                                    ],
+                                ),
+                            ),
+                            wheres: [],
+                        },
+                    },
+                ],
+            },
+        },
+    ],
+}
