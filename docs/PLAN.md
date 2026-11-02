@@ -34,7 +34,7 @@ human input. The README shows them all, updated daily by
 | M3 | **Parse**: aihc-boot parses the vendored tree | Modules parsed / total modules | 100% |
 | M4 | **Resolve**: names and imports resolve | Modules resolved / total modules | 100% |
 | M5 | **Typecheck**: including type classes and the extensions the tree uses | Modules typechecked / total modules | 100% |
-| M6 | **Eval**: generated code runs correctly | Eval tests passing / total eval tests | 100%, with tests covering every vendored package |
+| M6 | **Eval**: the interpreter runs the vendored packages correctly | Eval tests passing / total eval tests | 100%, with tests covering every vendored package |
 | M7 | **Stage 1**: aihc-boot builds a working `aihc` | Stage-1 checks passing / total | `aihc` built by aihc-boot passes the stage-1 checks |
 
 Notes:
@@ -160,6 +160,116 @@ M3–M7 read 0.
   against the vendored packages. Used by the eval tests.
 - Stage-1 scripts invoke `$AIHC_BOOT` however they need to.
 
+## Eval strategy
+
+aihc-boot runs `aihc` with an interpreter. It does not generate code.
+The interpreter is a lazy graph reducer over a small untyped Core
+language, with a copying garbage collector. Speed matters little for a
+one-off bootstrap build, but `boot.toml` gives stage 1 one hour. Measure
+the time early.
+
+The vendored tree uses type classes everywhere. Many methods are
+resolved by their return type alone: `pure` and `>>=` in a `do` block
+over `StateT`, `fromInteger` on a literal, `mempty`, `minBound` and
+`read`. No run-time rule can select these dictionaries. So eval needs
+dictionary-passing desugaring, and that needs type inference. The
+typechecker is on the path to M6. The extension set is modest:
+`OverloadedStrings`, `BangPatterns`, `PatternSynonyms`, `LambdaCase`,
+some `RankNTypes` and `TypeApplications`, almost no type families and
+no GADT declarations.
+
+### Core
+
+Core is untyped. It has lambda, application, `let` and `letrec`, `case`
+on constructors and literals, literals and primitive calls. Both the
+desugarer and the typechecker produce Core. The interpreter runs only
+Core. This separation makes the evaluator and the typechecker
+independent: one person can work on each. Name resolution (M4) is on
+the critical path for both.
+
+### Steps
+
+Each step has tests that pass or fail without human input. Do the steps
+in this order, but the evaluator steps (1, 2) and the typechecker step
+(3) can run at the same time.
+
+1. **Evaluator.** Desugar a monomorphic subset of Haskell into Core
+   with no typechecker: no classes, no overloaded literals, only `Int`,
+   `Char`, lists, tuples and `putStrLn`. Write the evaluator and the
+   collector in C. Eval tests in `tests/eval/lang/NAME.hs` check
+   laziness, recursion, pattern matching, guards, `where` and `let`.
+   GHC writes the golden `NAME.stdout`.
+2. **Primitives.** Add `Int`, `Integer`, `Double`, `Char`, `IORef`,
+   `MVar`, `STRef`, exceptions, and file and process IO as interpreter
+   builtins. The tree uses mutable references and exceptions in many
+   places, so these are not optional. Add a name to `vendor/base` when
+   an eval test needs it.
+3. **Typechecker.** Hindley-Milner with classes, superclasses,
+   defaulting and `deriving` for `Eq`, `Ord`, `Show`, `Enum`, `Bounded`
+   and `NFData`. Its output is Core with explicit dictionaries, so it
+   plugs into the evaluator of step 1 without a change. M5 counts a
+   module as typechecked when aihc-boot accepts it. A wrong dictionary
+   shows up as an eval failure. Add an oracle on the vendored `aihc-tc`,
+   in the style of the parse and resolve oracles, only if the accept
+   rate hides bugs.
+4. **Per-package eval tests.** `deepseq`, then `containers`, `text`,
+   `bytestring`, `filepath`, `transformers`, `megaparsec`,
+   `prettyprinter`, then the `aihc-*` packages. Each package gives one
+   visible "package works" step and grows the boot `base`.
+5. **Whole-tree load.** Load every vendored module into one Core
+   program. Check memory and time. This step tests the collector and
+   the size of `aihc`.
+6. **Stage 1.** The `tests/stage1` ladder: link, `--version`, hello
+   world, a subset of the tests of aihc.
+
+Two rules help at every step. First, keep the "not supported yet" error
+with a position in the desugarer and the typechecker, so the tracker
+always shows the next construct to implement. Second, prune `aihc`
+itself. `Read`, `Data` and `Generic` deriving clauses appear on about
+one hundred types each. Delete the clauses that no code uses. `Generic`
+instances need type families, and this is the one place that would
+force type families into the typechecker.
+
+### The boot base and the core libraries of aihc
+
+aihc has its own core libraries in `core-libs/`: `aihc-prim`,
+`aihc-internal` and `aihc-base`. aihc-boot does not run them. It has
+its own small `base` in `vendor/base`, and takes from the aihc
+libraries what is useful.
+
+| Code | Modules | Lines |
+| --- | ---: | ---: |
+| aihc-prim + aihc-internal + aihc-base | 503 | about 37,700 |
+| aihc itself, the whole target | 94 | 46,705 |
+
+The aihc libraries would almost double the code that aihc-boot has to
+compile, and in the hardest dialect in the tree. `aihc-prim` mirrors
+GHC: `data Int = I# Int#`, IO as a function on a state token, unboxed
+tuples, levity-polymorphic `seq` and `raise#`, `DataKinds`, `PolyKinds`,
+kind signatures and about four hundred `foreign import prim` primops.
+An interpreter wants the opposite: `Int` is a machine integer in a heap
+cell, and `+` is one builtin. The same reduction that took `text` from
+twenty thousand lines to one thousand applies to `base`.
+
+Take these parts from the aihc libraries:
+
+- **Module names and export lists**, so the vendored tree continues to
+  build with the real `base` of GHC.
+- **Pure Haskell definitions** for `Data.List`, `Data.Maybe`,
+  `Control.Monad`, the `Foldable` and `Traversable` instances, and the
+  `Show` and `Read` machinery. They are plain code, and GHC has the
+  same code.
+- **The `foreign import prim` declaration form** for the boxed
+  primitives of the boot `base`. `aihc-parser` and `aihc-resolve` read
+  it, and GHC does not build `vendor/base`, so it costs nothing.
+
+There are two different bases. The boot `base` is the library that
+aihc-boot runs `aihc` against. The `core-libs` of aihc are the input
+that a stage-1 `aihc` compiles hello world against. M7 vendors
+`core-libs` as data for `aihc` to read, but aihc-boot never interprets
+them. `aihc-rts` is the native and wasm runtime for GRIN output, and
+the interpreter does not use it.
+
 ## Open decisions
 
 1. **Implementation language of aihc-boot: C89.** Decided. A non-Haskell
@@ -168,9 +278,9 @@ M3–M7 read 0.
    system, so the bootstrap needs nothing more than a C compiler. The
    first version was in Rust; the C version replaced it with the same
    behavior. See "Layout of the compiler" below.
-2. **Code generation target for M6/M7:** C (easiest to debug, portable), a
-   bytecode interpreter (smallest, and slow may be fine for a one-off
-   bootstrap build), or native code.
+2. **Code generation target for M6/M7: an interpreter.** Decided. aihc-boot
+   interprets Core and generates no code. It is the smallest option, and
+   slow is fine for a one-off bootstrap build. See "Eval strategy" above.
 3. **How far to simplify `text`:** keep a real UTF-8 array implementation,
    or back `Text` with `String` and accept the slower stage-1 compiler.
 4. **Whether `vector`/`primitive` become thin wrappers over `array`.**
