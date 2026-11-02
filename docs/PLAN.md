@@ -361,10 +361,22 @@ one file for each stage:
   primitive NAME; the evaluator defines the arity and the strictness of
   each primitive. IO is a function from a world token to `IORes a`;
   `main` runs applied to the token. Primitives that need a whole
-  String, such as `error`, force it through a nested run of the
-  machine. An `Integer` that fits in a C `long` is an `Int` object.
-  A larger `Integer` is a sign and limbs of 16 bits, so the
-  arithmetic needs no type wider than C89 has.
+  String force it through a nested run of the machine. An `Integer`
+  that fits in a C `long` is an `Int` object. A larger `Integer` is a
+  sign and limbs of 16 bits, so the arithmetic needs no type wider
+  than C89 has.
+- Exceptions: the `raise` primitive jumps (`longjmp`) to the innermost
+  run of the machine. That run pops stack frames until it finds the
+  frame of a `catch` primitive, and then applies the handler. A thunk
+  under evaluation on the way becomes a thunk again. A nested run
+  passes the exception on to the run that called it. The outermost run
+  prints an uncaught exception and stops with exit code 1. The boot
+  `base` has no `Exception` class yet, so an exception is the thrown
+  value itself, and a handler gets every exception. `SomeException` is
+  a newtype, so its pattern matches every exception. A program that
+  catches only exceptions of the handler's type gets the same result
+  as with GHC. The typechecker will add the class and the selection by
+  type.
 - `src/main.c`: the `aihc-boot` command. It implements the command line
   contract above and reports every module as JSON. Failures carry an
   `error` field and, when known, the `line` and `col` of the first

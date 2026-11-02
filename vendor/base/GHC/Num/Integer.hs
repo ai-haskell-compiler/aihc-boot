@@ -38,6 +38,7 @@ module GHC.Num.Integer
   )
 where
 
+import GHC.Exception.Type
 import GHC.Types
 
 data Integer
@@ -55,15 +56,13 @@ foreign import prim "integerMul" integerMul :: Integer -> Integer -> Integer
 
 foreign import prim "integerNegate" integerNegate :: Integer -> Integer
 
--- | Division that rounds toward zero.
-foreign import prim "integerQuot" integerQuot :: Integer -> Integer -> Integer
+foreign import prim "integerQuot" primIntegerQuot :: Integer -> Integer -> Integer
 
-foreign import prim "integerRem" integerRem :: Integer -> Integer -> Integer
+foreign import prim "integerRem" primIntegerRem :: Integer -> Integer -> Integer
 
--- | Division that rounds toward negative infinity.
-foreign import prim "integerDiv" integerDiv :: Integer -> Integer -> Integer
+foreign import prim "integerDiv" primIntegerDiv :: Integer -> Integer -> Integer
 
-foreign import prim "integerMod" integerMod :: Integer -> Integer -> Integer
+foreign import prim "integerMod" primIntegerMod :: Integer -> Integer -> Integer
 
 -- | The greatest common divisor. It is never negative.
 foreign import prim "integerGcd" integerGcd :: Integer -> Integer -> Integer
@@ -100,6 +99,21 @@ integerSignum x
   | integerIsNegative x = integerNegate integerOne
   | integerIsZero x = integerZero
   | True = integerOne
+
+-- | Division that rounds toward zero. The division functions raise
+-- 'DivideByZero' when the divisor is zero, as in GHC.
+integerQuot :: Integer -> Integer -> Integer
+integerQuot x y = if integerIsZero y then divZeroError else primIntegerQuot x y
+
+integerRem :: Integer -> Integer -> Integer
+integerRem x y = if integerIsZero y then divZeroError else primIntegerRem x y
+
+-- | Division that rounds toward negative infinity.
+integerDiv :: Integer -> Integer -> Integer
+integerDiv x y = if integerIsZero y then divZeroError else primIntegerDiv x y
+
+integerMod :: Integer -> Integer -> Integer
+integerMod x y = if integerIsZero y then divZeroError else primIntegerMod x y
 
 integerQuotRem :: Integer -> Integer -> (Integer, Integer)
 integerQuotRem x y = (integerQuot x y, integerRem x y)

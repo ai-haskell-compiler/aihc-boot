@@ -1,0 +1,40 @@
+caught: boom
+3
+caught: thrown
+caught: from IO
+no exception
+caught: divide by zero
+caught: divide by zero
+caught: some exception
+caught: divide by zero
+caught: divide by zero
+caught: some exception
+3
+5
+caught: divide by zero
+Right: return does not force its value
+Left: head
+Left again
+Left again
+caught: inner again
+acquire 1
+release 1
+42
+acquire 2
+1
+release 2
+Left in use
+acquire 3
+use 3
+release 3
+body 1
+finally 1
+finally 2
+caught: body 2
+body 3
+on exception 4
+caught: divide by zero
+20
+caught: divide by zero
+25
+done
