@@ -151,11 +151,15 @@ M3–M7 read 0.
   follow GHC's `base`, so the vendored tree also builds with GHC. GHC
   does not build `vendor/base`, so it is not in `cabal.project`. A
   primitive type is an empty `data` declaration (`data Int`). A
-  primitive function is a `foreign import prim` declaration in
-  `GHC.Prim`, which the evaluator implements, or a definition in
-  Haskell (`seq` uses a bang pattern). Until the typechecker exists,
-  the base has no classes: `+`, `==` and `show` work on `Int`, and the
-  Char comparisons are `eqChar` and the others from `GHC.Classes`. Add
+  primitive function is a `foreign import prim` declaration, which
+  the evaluator implements, or a definition in Haskell (`seq` uses a
+  bang pattern). The `foreign import prim` declarations are in
+  `GHC.Prim`, or in the module that defines their primitive type when
+  GHC has that module (`Integer` is in `GHC.Num.Integer`). Until the
+  typechecker exists, the base has no classes: `+`, `==` and `show`
+  work on `Int`, the Char comparisons are `eqChar` and the others from
+  `GHC.Classes`, and `Integer` has the functions of `GHC.Num.Integer`
+  (`integerAdd` and the others). Add
   names to it when a package does not resolve or an eval test needs
   them.
 - Resolving and typechecking a package needs its dependencies, so aihc-boot
@@ -357,7 +361,10 @@ one file for each stage:
   primitive NAME; the evaluator defines the arity and the strictness of
   each primitive. IO is a function from a world token to `IORes a`;
   `main` runs applied to the token. Primitives that need a whole
-  String force it through a nested run of the machine.
+  String force it through a nested run of the machine. An `Integer`
+  that fits in a C `long` is an `Int` object. A larger `Integer` is a
+  sign and limbs of 16 bits, so the arithmetic needs no type wider
+  than C89 has.
 - Exceptions: the `raise` primitive jumps (`longjmp`) to the innermost
   run of the machine. That run pops stack frames until it finds the
   frame of a `catch` primitive, and then applies the handler. A thunk
