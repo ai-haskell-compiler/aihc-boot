@@ -266,8 +266,29 @@ static void tc_arg(Tc *tc, Arg a, Ty *ty)
         return;
     }
     if (prune(ty)->kind == T_FORALL) {
-        tc_fail(tc, xstrdup("an operator expression as a polymorphic argument is not "
-                            "supported yet"));
+        /* Check against the skolemized type. A context would need a
+         * dictionary lambda, which an operator node has no note for. */
+        Ty *t = prune(ty);
+        size_t ntyvars = tc->tyvars.len;
+        tc->level++;
+        while (t->kind == T_FORALL) {
+            Vec sk;
+            size_t i;
+            if (t->preds.len > 0) {
+                tc_fail(tc, xstrdup("an operator expression as an argument of a constrained "
+                                    "polymorphic type is not supported yet"));
+            }
+            vec_init(&sk);
+            for (i = 0; i < t->vars.len; i++) {
+                vec_push(&sk, ty_skol(tc, ((Ty *)t->vars.items[i])->name));
+            }
+            t = prune(ty_subst(t->body, &t->vars, &sk));
+        }
+        tc_fnode(tc, a.n, t);
+        solve(tc);
+        tc->tyvars.len = ntyvars;
+        tc->level--;
+        return;
     }
     tc_fnode(tc, a.n, ty);
 }

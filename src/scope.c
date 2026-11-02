@@ -623,7 +623,8 @@ static const Scope *import_scope(const Program *p, const Import *import,
         const ImportItem *item = (const ImportItem *)import->items.items[i];
         Space space;
         Entity *entity;
-        if (item->kind == IMPORT_VAR) {
+        if (item->kind == IMPORT_VAR || item->kind == IMPORT_PATTERN) {
+            /* `pattern C` imports a constructor or a pattern synonym. */
             space = SPACE_TERM;
         } else if (item->kind == IMPORT_THING && !item->explicit_type) {
             space = SPACE_TYPE;

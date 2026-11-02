@@ -1,0 +1,27 @@
+square with area 9
+shape with area 10
+40
+(Rect {width = 1, height = 2},True)
+Rect {width = 1, height = 9}
+[Red,Green,Blue]
+(Green,2,LT,Blue)
+(28,2160,6,9,True,[10,20,30,50,80,90])
+Node Leaf "True" Leaf
+[10,11,12]
+"abc"
+[3,2,1]
+Just [1,2,3]
+Nothing
+[[1,2],[1,20],[10,2],[10,20]]
+(1180591620717411303424,4)
+"3-46148914691236517205"
+caught oops
+some: MyErr "boom"
+divide by zero
+'x'/[True]
+negative
+zero
+positive
+<1><"s"><Just Green>
+("abcd","",[1,2,3])
+(["a","b","c"],"x y",["l1","l2"])

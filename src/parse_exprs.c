@@ -555,8 +555,11 @@ static Expr *paren_exp(Parser *p)
         r->a = (Expr *)items.items[0];
         if (r->a->kind == EXPR_NEG) {
             /* As in aihc-parser, `(- e)` has the span of the
-             * parentheses. */
+             * parentheses, */
             r->a->span = p_span_from(p, start);
+        } else if (r->a->kind == EXPR_INFIX && r->a->a->kind == EXPR_NEG) {
+            /* and so has the negation that starts `(- e + f)`. */
+            r->a->a->span = p_span_from(p, start);
         }
         return r;
     }

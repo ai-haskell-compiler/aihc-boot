@@ -67,6 +67,7 @@ library
     GHC.Stack.Types
     GHC.Types
     GHC.Word
+    Numeric.Natural
     Prelude
     System.IO
     System.IO.Unsafe

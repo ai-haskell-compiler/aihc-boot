@@ -163,3 +163,11 @@ instance (Show a, Show b, Show c, Show d) => Show (a, b, c, d) where
 instance (Show a, Show b, Show c, Show d, Show e) => Show (a, b, c, d, e) where
   showsPrec _ (a, b, c, d, e) s =
     '(' : shows a (',' : shows b (',' : shows c (',' : shows d (',' : shows e (')' : s)))))
+
+instance (Show a, Show b, Show c, Show d, Show e, Show f) => Show (a, b, c, d, e, f) where
+  showsPrec _ (a, b, c, d, e, f) s =
+    '(' : shows a (',' : shows b (',' : shows c (',' : shows d (',' : shows e (',' : shows f (')' : s))))))
+
+instance (Show a, Show b, Show c, Show d, Show e, Show f, Show g) => Show (a, b, c, d, e, f, g) where
+  showsPrec _ (a, b, c, d, e, f, g) s =
+    '(' : shows a (',' : shows b (',' : shows c (',' : shows d (',' : shows e (',' : shows f (',' : shows g (')' : s)))))))

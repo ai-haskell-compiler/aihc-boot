@@ -151,3 +151,19 @@ instance (Ord a, Ord b, Ord c, Ord d, Ord e) => Ord (a, b, c, d, e) where
   compare (a, b, c, d, e) (f, g, h, i, j) = case compare a f of
     EQ -> compare (b, c, d, e) (g, h, i, j)
     other -> other
+
+instance (Eq a, Eq b, Eq c, Eq d, Eq e, Eq f) => Eq (a, b, c, d, e, f) where
+  (a, b, c, d, e, f) == (g, h, i, j, k, l) = a == g && b == h && c == i && d == j && e == k && f == l
+
+instance (Ord a, Ord b, Ord c, Ord d, Ord e, Ord f) => Ord (a, b, c, d, e, f) where
+  compare (a, b, c, d, e, f) (g, h, i, j, k, l) = case compare a g of
+    EQ -> compare (b, c, d, e, f) (h, i, j, k, l)
+    other -> other
+
+instance (Eq a, Eq b, Eq c, Eq d, Eq e, Eq f, Eq g) => Eq (a, b, c, d, e, f, g) where
+  (a, b, c, d, e, f, g) == (h, i, j, k, l, m, n) = a == h && b == i && c == j && d == k && e == l && f == m && g == n
+
+instance (Ord a, Ord b, Ord c, Ord d, Ord e, Ord f, Ord g) => Ord (a, b, c, d, e, f, g) where
+  compare (a, b, c, d, e, f, g) (h, i, j, k, l, m, n) = case compare a h of
+    EQ -> compare (b, c, d, e, f, g) (i, j, k, l, m, n)
+    other -> other
