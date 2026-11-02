@@ -150,14 +150,25 @@ M3–M7 read 0.
   has only the names that the vendored tree uses. Its modules and names
   follow GHC's `base`, so the vendored tree also builds with GHC. GHC
   does not build `vendor/base`, so it is not in `cabal.project`. A
-  primitive is an empty `data` declaration (`data Int`) or a definition
-  in Haskell (`seq` uses a bang pattern). Add names to it when a
-  package does not resolve.
+  primitive type is an empty `data` declaration (`data Int`). A
+  primitive function is a `foreign import prim` declaration in
+  `GHC.Prim`, which the evaluator implements, or a definition in
+  Haskell (`seq` uses a bang pattern). Until the typechecker exists,
+  the base has no classes: `+`, `==` and `show` work on `Int`, and the
+  Char comparisons are `eqChar` and the others from `GHC.Classes`. Add
+  names to it when a package does not resolve or an eval test needs
+  them.
 - Resolving and typechecking a package needs its dependencies, so aihc-boot
   reads the `.cabal` files under `vendor/` itself to find them. A
   dependency counts only when it is vendored.
-- `aihc-boot run FILE.hs` compiles and runs a single-module program
-  against the vendored packages. Used by the eval tests.
+- `aihc-boot run FILE.hs` runs a single-module program against the
+  boot `base`. The eval tests use it. The program's standard input and
+  output are the ones of `aihc-boot`. `AIHC_BOOT_HEAP` sets the initial
+  heap in words; the tests use a small value to run the collector
+  often.
+- `aihc-boot core FILE.hs` prints the Core of the program's module, and
+  `aihc-boot core --all FILE.hs` the Core of every module it reaches.
+  For debugging and the golden tests in `tests/core/`.
 - Stage-1 scripts invoke `$AIHC_BOOT` however they need to.
 
 ## Eval strategy
@@ -196,7 +207,7 @@ in this order, but the evaluator steps (1, 2) and the typechecker step
 1. **Evaluator.** Desugar a monomorphic subset of Haskell into Core
    with no typechecker: no classes, no overloaded literals, only `Int`,
    `Char`, lists, tuples and `putStrLn`. Write the evaluator and the
-   collector in C. Eval tests in `tests/eval/lang/NAME.hs` check
+   collector in C. Eval tests in `tests/eval/base/NAME.hs` check
    laziness, recursion, pattern matching, guards, `where` and `let`.
    GHC writes the golden `NAME.stdout`.
 2. **Primitives.** Add `Int`, `Integer`, `Double`, `Char`, `IORef`,
@@ -218,7 +229,12 @@ in this order, but the evaluator steps (1, 2) and the typechecker step
    visible "package works" step and grows the boot `base`.
 5. **Whole-tree load.** Load every vendored module into one Core
    program. Check memory and time. This step tests the collector and
-   the size of `aihc`.
+   the size of `aihc`. One known cost comes first: the evaluator's
+   environments are linked frames, so a closure keeps every variable of
+   its enclosing frames alive, not only the ones it uses. A function
+   that walks a list from a frame that also holds the list's head keeps
+   the whole list in memory. Flat closures, which capture only their
+   free variables, remove this leak.
 6. **Stage 1.** The `tests/stage1` ladder: link, `--version`, hello
    world, a subset of the tests of aihc.
 
@@ -320,6 +336,29 @@ one file for each stage:
   vendored `aihc-resolve`. See "Compiler interface" above.
 - `src/manifest.c`: reads the `.cabal` files under `vendor/` and writes
   the manifest that the oracle reads.
+- `src/core.h` and `src/core.c`: Core, the untyped language of the
+  interpreter (see "Eval strategy"), and its printer. A variable is a
+  frame distance and a slot, not a name. A lambda, a let group and a
+  case alternative with fields each bind one frame.
+- `src/desugar.c`: the syntax tree of every module that Main reaches to
+  Core. It takes the top-level scopes from `src/scope.c` and keeps the
+  local scope itself. Fixity resolution follows section 10.6 of the
+  Haskell 2010 report. Pattern matching becomes nested `case`
+  expressions with a fail expression for the next clause, the next
+  alternative or the next guard. The clauses after the first are
+  let-bound, so a failed match evaluates each one at most once. A
+  newtype constructor is erased. A construct outside the subset fails
+  with a "not supported yet" error and the position of its declaration.
+- `src/eval.c`: the evaluator. A lazy abstract machine with an explicit
+  stack of continuation frames (update, argument, case, primitive) over
+  a heap of words, and a copying collector that doubles the heap when
+  it fills up. The primitives are in a table by name. A `foreign import
+  prim "NAME" f :: t` declaration in the boot `base` binds `f` to the
+  primitive NAME; the evaluator defines the arity and the strictness of
+  each primitive. IO is a function from a world token to `IORes a`;
+  `main` runs applied to the token. Primitives that need a whole
+  String, such as `error`, force it through a nested run of the
+  machine.
 - `src/main.c`: the `aihc-boot` command. It implements the command line
   contract above and reports every module as JSON. Failures carry an
   `error` field and, when known, the `line` and `col` of the first
@@ -328,7 +367,8 @@ one file for each stage:
 
 aihc-boot is a short-lived process, so it does not free most of its
 memory. The tests are in `tests/`: golden files for the syntax stages
-(`tests/syntax/`), and a round trip (print, parse, print) over every
+(`tests/syntax/`) and for Core (`tests/core/`), the eval tests
+(`tests/eval/`), and a round trip (print, parse, print) over every
 vendored module that parses.
 
 ## Tooling
