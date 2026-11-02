@@ -161,18 +161,20 @@ M3–M7 read 0.
   the evaluator implements, or a definition in Haskell (`seq` uses a
   bang pattern). The `foreign import prim` declarations are in
   `GHC.Prim`, or in the module that defines their primitive type when
-  GHC has that module (`Integer` is in `GHC.Num.Integer`). Until the
-  typechecker exists, the base has no classes: `+`, `==` and `show`
-  work on `Int`, the Char comparisons are `eqChar` and the others from
-  `GHC.Classes`, and `Integer` has the functions of `GHC.Num.Integer`
-  (`integerAdd` and the others). Add
-  names to it when a package does not resolve or an eval test needs
-  them.
+  GHC has that module (`Integer` is in `GHC.Num.Integer`). The base has
+  the classes of GHC's base (`Eq`, `Ord`, `Num`, `Show`, `Monad`,
+  `Foldable` and the others). Its modules come in layers without import
+  cycles, so a module below `GHC.Num` (such as `GHC.Show`) has no
+  integer literals. `scripts/gen_base_ints.py` writes the fixed-size
+  integer types (`GHC.Word`, `GHC.Int`, `Foreign.C.Types`). A `Ptr` is
+  an address in an `Int`, and the base never frees memory. Add names to
+  the base when a package does not resolve or an eval test needs them.
 - Resolving and typechecking a package needs its dependencies, so aihc-boot
   reads the `.cabal` files under `vendor/` itself to find them. A
   dependency counts only when it is vendored.
 - `aihc-boot run FILE.hs` runs a single-module program against the
-  boot `base`. The eval tests use it. The program's standard input and
+  boot `base`, or against PKG and its dependencies for a file in
+  `tests/eval/PKG/`. The eval tests use it. The program's standard input and
   output are the ones of `aihc-boot`. `AIHC_BOOT_HEAP` sets the initial
   heap in words; the tests use a small value to run the collector
   often.
@@ -272,7 +274,8 @@ in this order, but the evaluator steps (1, 2) and the typechecker step
    solves the same problems and is a reference for the design. The
    output of the typechecker is Core with explicit dictionaries, so it
    plugs into the evaluator of step 1 without a change. M5 counts a
-   module as typechecked when aihc-boot accepts it. A wrong dictionary
+   module as typechecked when it resolves as the oracle resolves it and
+   aihc-boot accepts it. A wrong dictionary
    shows up as an eval failure. Add an oracle on the vendored `aihc-tc`,
    in the style of the parse and resolve oracles, only if the accept
    rate hides bugs.
@@ -382,9 +385,9 @@ one file for each stage:
   resolutions of a module. The resolver gives every identifier
   occurrence a target. It uses the span rules of aihc-resolve, because
   the comparison needs the same spans. The resolver handles the
-  constructs of `base` and `deepseq`. A module with another construct
-  fails with a "not supported yet" error and the position of the
-  construct, so `aihc-boot check --stage resolve --package NAME` shows
+  constructs of `base`, `deepseq`, `bytestring` and `text`. A module
+  with another construct fails with a "not supported yet" error and the
+  position of the construct, so `aihc-boot check --stage resolve --package NAME` shows
   which construct to implement next.
 - `tools/resolve-oracle`: the reference resolver, a small program on the
   vendored `aihc-resolve`. See "Compiler interface" above.
@@ -394,10 +397,28 @@ one file for each stage:
   interpreter (see "Eval strategy"), and its printer. A variable is a
   frame distance and a slot, not a name. A lambda, a let group and a
   case alternative with fields each bind one frame.
+- `src/tc.h` and `src/tc_*.c`: the typechecker (see step 3 of "Eval
+  strategy"). `tc_type.c` has the types, unification and matching,
+  `tc_solve.c` the constraints and the solver, `tc_expr.c` the
+  expressions, patterns and binding groups, `tc_decl.c` the
+  declarations and modules, and `tc_derive.c` the derived instances.
+  Inference makes wanted constraints. Each wanted keeps the givens that
+  were in scope where inference made it. A binding group without
+  signatures is split into strongly connected components, and each
+  component is generalized with levels. The typechecker writes notes
+  into the syntax tree: the dictionaries of each overloaded occurrence,
+  and the dictionary parameters of each binding. A derived instance is
+  Haskell source with qualified names, which the typechecker parses
+  and checks as a written instance. The typechecker does not check
+  kinds or skolem escape: GHC checks the vendored tree.
+- `src/fixity.c`: fixity resolution, as section 10.6 of the Haskell
+  2010 report specifies. The typechecker and the desugarer use it.
 - `src/desugar.c`: the syntax tree of every module that Main reaches to
   Core. It takes the top-level scopes from `src/scope.c` and keeps the
-  local scope itself. Fixity resolution follows section 10.6 of the
-  Haskell 2010 report. Pattern matching becomes nested `case`
+  local scope itself. It reads the notes of the typechecker: a class
+  becomes a data type of dictionaries, an instance a global that builds
+  a dictionary, and an overloaded name takes its dictionaries as
+  arguments. Pattern matching becomes nested `case`
   expressions with a fail expression for the next clause, the next
   alternative or the next guard. The clauses after the first are
   let-bound, so a failed match evaluates each one at most once. A

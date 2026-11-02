@@ -8,8 +8,8 @@
  *
  * A Program holds the top-level names of every package (see scope.c), and
  * resolve_module resolves one module of it (see resolve.c). The resolver
- * handles the constructs of the vendored `base` and `deepseq`. It refuses
- * the others with a "not supported yet" error.
+ * handles the constructs of the vendored `base`, `deepseq`, `bytestring`
+ * and `text`. It refuses the others with a "not supported yet" error.
  */
 #ifndef AIHC_RESOLVE_H
 #define AIHC_RESOLVE_H
