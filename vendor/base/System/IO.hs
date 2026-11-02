@@ -12,8 +12,11 @@ module System.IO
   )
 where
 
+import Data.Foldable
 import GHC.Base
 import GHC.Classes
+import GHC.Err
+import GHC.Num
 import GHC.Prim
 import GHC.Show
 import GHC.Types
@@ -27,7 +30,7 @@ putStr = mapM_ primPutChar
 putStrLn :: String -> IO ()
 putStrLn s = putStr s >> primPutChar '\n'
 
-print :: Int -> IO ()
+print :: (Show a) => a -> IO ()
 print x = putStrLn (show x)
 
 getChar :: IO Char

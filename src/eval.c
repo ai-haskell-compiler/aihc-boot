@@ -1227,6 +1227,12 @@ static Obj *p_whnf(Obj **a)
     return a[0];
 }
 
+/* The argument, unevaluated, at another type. */
+static Obj *p_unsafe_coerce(Obj **a)
+{
+    return a[0];
+}
+
 static const PrimInfo prims[] = {
     {"intAdd", 2, 3, p_int_add},
     {"intSub", 2, 3, p_int_sub},
@@ -1274,6 +1280,7 @@ static const PrimInfo prims[] = {
     {"getChar", 1, 0, p_get_char},
     {"flush", 1, 0, p_flush},
     {"whnf", 1, 1, p_whnf},
+    {"unsafeCoerce", 1, 0, p_unsafe_coerce},
     {NULL, 0, 0, NULL}
 };
 
@@ -1648,9 +1655,9 @@ ret:
 
 /* --- Exceptions --------------------------------------------------------- */
 
-/* The message of an exception that nothing catches. The boot base has
- * no Show class yet, so the evaluator knows the exception types of the
- * boot base by name. */
+/* The message of an exception that nothing catches. The evaluator
+ * knows the exception types of the boot base by name. A SomeException
+ * holds the Exception dictionary and the exception. */
 static char *exception_message(Obj *exc)
 {
     const ConInfo *con;
@@ -1659,6 +1666,9 @@ static char *exception_message(Obj *exc)
         return xstrdup("uncaught exception");
     }
     con = (const ConInfo *)W(exc)[0].c;
+    if (str_eq(con->name, "SomeException") && con->arity == 2) {
+        return exception_message(W(exc)[2].p);
+    }
     if (str_eq(con->type->name, "ErrorCall") && con->arity == 1) {
         return force_string(W(exc)[1].p);
     }

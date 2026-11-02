@@ -132,6 +132,11 @@ Vec builtin_modules(const Vec *packages)
     vec_init(&out);
     if (vec_has_str(packages, "base")) {
         vec_push(&out, "GHC.Types");
+        vec_push(&out, "GHC.Classes");
+        vec_push(&out, "GHC.Num");
+        vec_push(&out, "GHC.Base");
+        vec_push(&out, "GHC.Enum");
+        vec_push(&out, "Data.String");
     }
     return out;
 }
@@ -222,13 +227,11 @@ Target program_builtin(const Program *p, const char *module, Space space,
 {
     size_t i;
     Target t;
+    (void)module;
     for (i = 0; i < p->builtin_modules.len; i++) {
         const char *builtin = (const char *)p->builtin_modules.items[i];
         const ModuleData *data;
         const Entity *entity;
-        if (str_eq(builtin, module)) {
-            continue;
-        }
         data = (const ModuleData *)strmap_get(&p->modules, builtin);
         if (data == NULL || data->exports == NULL) {
             continue;
@@ -749,6 +752,34 @@ static Scope *module_exports(const Program *p, const char *package,
     return out;
 }
 
+/* Whether a module of the package that is being added is active, or
+ * imports an active module, directly or through other modules of the
+ * package. */
+static int reaches_active(const Program *p, const char *name, const StrMap *pending,
+                          const Vec *active, Vec *seen)
+{
+    const SourceModule *source;
+    size_t i;
+    if (vec_has_str(active, name)) {
+        return 1;
+    }
+    if (strmap_has(&p->modules, name) || vec_has_str(seen, name)) {
+        return 0;
+    }
+    vec_push(seen, (char *)name);
+    source = (const SourceModule *)strmap_get(pending, name);
+    if (source == NULL) {
+        return 0;
+    }
+    for (i = 0; i < source->module->imports.len; i++) {
+        const Import *import = (const Import *)source->module->imports.items[i];
+        if (reaches_active(p, import->module, pending, active, seen)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Compute the scope and the exports of a module of the package that is
  * being added, and first those of the sibling modules it imports.
  * pending holds the modules of the package by name (SourceModule *);
@@ -785,11 +816,14 @@ static void compute(Program *p, const char *name, const Package *package,
     if (prelude) {
         compute(p, "Prelude", package, pending, active);
     }
-    /* A builtin module is no import: when it is being computed, it just
-     * gives nothing yet. */
+    /* A builtin module is no import: when it is being computed, or when
+     * it imports a module that is being computed, it just gives nothing
+     * yet. */
     for (i = 0; i < p->builtin_modules.len; i++) {
         const char *builtin = (const char *)p->builtin_modules.items[i];
-        if (!vec_has_str(active, builtin)) {
+        Vec seen;
+        vec_init(&seen);
+        if (!reaches_active(p, builtin, pending, active, &seen)) {
             compute(p, builtin, package, pending, active);
         }
     }

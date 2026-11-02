@@ -299,8 +299,11 @@ static ResolveError *data_decl(Resolver *r, const Decl *decl)
     }
     for (i = 0; i < decl->cons.len; i++) {
         const ConDecl *con = (const ConDecl *)decl->cons.items[i];
-        if (con->forall.len > 0 || con->ctx != NULL) {
-            return unsupported("an existential constructor", &con->pos);
+        if ((e = binder_kinds(r, &con->forall)) != NULL) {
+            return e;
+        }
+        if (con->ctx != NULL && (e = context(r, con->ctx)) != NULL) {
+            return e;
         }
         switch (con->kind) {
         case CON_PREFIX:

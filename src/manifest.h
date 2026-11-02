@@ -81,6 +81,6 @@ char *manifest(const char *target, char **out);
  * resolver. The program leaves out a module that does not parse: such a
  * module has no exports.
  * Returns NULL on success, or an error message (see package_order). */
-char *program(const char *target, Program **out);
+char *program(const char *target, Program **out, Vec *packages_out);
 
 #endif

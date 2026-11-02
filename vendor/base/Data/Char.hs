@@ -16,6 +16,7 @@ module Data.Char
 where
 
 import GHC.Classes
+import GHC.Err
 import GHC.Num
 import GHC.Prim
 import GHC.Types
@@ -27,16 +28,16 @@ chr :: Int -> Char
 chr = primChr
 
 isDigit :: Char -> Bool
-isDigit c = geChar c '0' && leChar c '9'
+isDigit c = c >= '0' && c <= '9'
 
 isSpace :: Char -> Bool
-isSpace c = eqChar c ' ' || (geChar c '\t' && leChar c '\r')
+isSpace c = c == ' ' || (c >= '\t' && c <= '\r')
 
 isUpper :: Char -> Bool
-isUpper c = geChar c 'A' && leChar c 'Z'
+isUpper c = c >= 'A' && c <= 'Z'
 
 isLower :: Char -> Bool
-isLower c = geChar c 'a' && leChar c 'z'
+isLower c = c >= 'a' && c <= 'z'
 
 isAlpha :: Char -> Bool
 isAlpha c = isUpper c || isLower c
@@ -53,8 +54,8 @@ toLower c = if isUpper c then primChr (primOrd c + 32) else c
 digitToInt :: Char -> Int
 digitToInt c
   | isDigit c = primOrd c - primOrd '0'
-  | geChar c 'a' && leChar c 'f' = primOrd c - primOrd 'a' + 10
-  | geChar c 'A' && leChar c 'F' = primOrd c - primOrd 'A' + 10
+  | c >= 'a' && c <= 'f' = primOrd c - primOrd 'a' + 10
+  | c >= 'A' && c <= 'F' = primOrd c - primOrd 'A' + 10
   | True = error "Char.digitToInt: not a digit"
 
 intToDigit :: Int -> Char

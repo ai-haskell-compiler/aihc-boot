@@ -18,14 +18,23 @@ library
 
   exposed-modules:
     Control.Exception
+    Control.Monad
     Data.Char
     Data.Either
+    Data.Foldable
+    Data.Functor
     Data.List
     Data.Maybe
+    Data.String
+    Data.Traversable
     Data.Tuple
+    Data.Typeable
+    Data.Typeable.Internal
     GHC.Base
     GHC.Classes
     GHC.Enum
+    GHC.Err
+    GHC.Exception
     GHC.Exception.Type
     GHC.Generics
     GHC.List

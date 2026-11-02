@@ -36,6 +36,7 @@
 #include "resolve.h"
 #include "syntax.h"
 #include "sys.h"
+#include "tc.h"
 #include "util.h"
 
 static const char USAGE[] =
@@ -356,7 +357,7 @@ static Module *read_module(const char *file, Report *report)
  * program, or NULL. */
 static Report check_module(const char *file, const char *stage,
                            const Reference *reference, Oracle *oracle,
-                           const Program *program, const char *program_err)
+                           const Program *program, const char *program_err, const Tc *tc)
 {
     Report report;
     Module *module = read_module(file, &report);
@@ -453,8 +454,16 @@ static Report check_module(const char *file, const char *stage,
         return report_fail(str_printf("resolve: %s: %s", recspan_str(d.span), d.message),
                            &pos);
     }
-    if (!str_eq(stage, "resolve")) {
-        return report_fail(str_printf("stage %s is not implemented yet", stage), NULL);
+    if (str_eq(stage, "typecheck")) {
+        Pos pos;
+        const char *terr;
+        if (tc == NULL) {
+            return report_fail(xstrdup("typecheck: no typechecker"), NULL);
+        }
+        terr = tc_module_error(tc, module->name, &pos);
+        if (terr != NULL) {
+            return report_fail(xstrdup(terr), pos.line != 0 ? &pos : NULL);
+        }
     }
     return report_ok();
 }
@@ -508,8 +517,10 @@ static char *check(int argc, char **argv)
     Program *prog = NULL;
     char *program_err = NULL;
     Vec files;
+    Vec packages;
     StrBuf out;
     size_t i;
+    Tc *tc = NULL;
     if (e != NULL) {
         return e;
     }
@@ -518,13 +529,19 @@ static char *check(int argc, char **argv)
     /* The resolver needs the top-level names of the package and of its
      * dependencies. */
     if (!str_eq(stage, "parse")) {
-        program_err = program(package, &prog);
+        program_err = program(package, &prog, &packages);
+    }
+    if (str_eq(stage, "typecheck") && program_err == NULL) {
+        tc = tc_new(prog);
+        for (i = 0; i < packages.len; i++) {
+            tc_package(tc, (const Package *)packages.items[i]);
+        }
     }
     files = haskell_files(pkg_dir);
     sb_init(&out);
     for (i = 0; i < files.len; i++) {
         const char *file = (const char *)files.items[i];
-        Report report = check_module(file, stage, &reference, &oracle, prog, program_err);
+        Report report = check_module(file, stage, &reference, &oracle, prog, program_err, tc);
         sb_clear(&out);
         sb_puts(&out, "{\"file\": ");
         json_string(&out, file);
@@ -580,7 +597,7 @@ static char *dump(int argc, char **argv)
     if (e != NULL) {
         return e;
     }
-    if ((e = program(package, &prog)) != NULL) {
+    if ((e = program(package, &prog, NULL)) != NULL) {
         return e;
     }
     dump_init(&d);
@@ -789,13 +806,19 @@ static char *desugar_file(int argc, char **argv, const char *command, CoreProgra
     Program *p = NULL;
     Vec packages;
     char *e;
+    Tc *tc;
+    size_t i;
     if (argc != 1) {
         return str_printf("%s takes one file", command);
     }
     if ((e = program_for_file(argv[0], &p, &packages)) != NULL) {
         return e;
     }
-    return desugar_program(p, &packages, core);
+    tc = tc_new(p);
+    for (i = 0; i < packages.len; i++) {
+        tc_package(tc, (const Package *)packages.items[i]);
+    }
+    return desugar_program(p, tc, &packages, core);
 }
 
 static char *run(int argc, char **argv)

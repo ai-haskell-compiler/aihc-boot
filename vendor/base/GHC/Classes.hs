@@ -1,22 +1,7 @@
--- | Comparisons and Boolean operations. The boot base has no classes yet:
--- the comparisons work on Int only, and the Char comparisons have their
--- own names.
+-- | The classes 'Eq' and 'Ord', and the Boolean operations.
 module GHC.Classes
-  ( (==),
-    (/=),
-    (<),
-    (<=),
-    (>),
-    (>=),
-    compare,
-    max,
-    min,
-    eqChar,
-    neChar,
-    ltChar,
-    leChar,
-    gtChar,
-    geChar,
+  ( Eq (..),
+    Ord (..),
     (&&),
     (||),
     not,
@@ -32,53 +17,30 @@ infixr 3 &&
 
 infixr 2 ||
 
-(==) :: Int -> Int -> Bool
-(==) = primIntEq
+class Eq a where
+  (==), (/=) :: a -> a -> Bool
+  x /= y = not (x == y)
+  x == y = not (x /= y)
 
-(/=) :: Int -> Int -> Bool
-(/=) = primIntNe
-
-(<) :: Int -> Int -> Bool
-(<) = primIntLt
-
-(<=) :: Int -> Int -> Bool
-(<=) = primIntLe
-
-(>) :: Int -> Int -> Bool
-(>) = primIntGt
-
-(>=) :: Int -> Int -> Bool
-(>=) = primIntGe
-
-compare :: Int -> Int -> Ordering
-compare x y
-  | primIntLt x y = LT
-  | primIntEq x y = EQ
-  | True = GT
-
-max :: Int -> Int -> Int
-max x y = if primIntLe x y then y else x
-
-min :: Int -> Int -> Int
-min x y = if primIntLe x y then x else y
-
-eqChar :: Char -> Char -> Bool
-eqChar = primCharEq
-
-neChar :: Char -> Char -> Bool
-neChar = primCharNe
-
-ltChar :: Char -> Char -> Bool
-ltChar = primCharLt
-
-leChar :: Char -> Char -> Bool
-leChar = primCharLe
-
-gtChar :: Char -> Char -> Bool
-gtChar = primCharGt
-
-geChar :: Char -> Char -> Bool
-geChar = primCharGe
+class (Eq a) => Ord a where
+  compare :: a -> a -> Ordering
+  (<), (<=), (>), (>=) :: a -> a -> Bool
+  max, min :: a -> a -> a
+  compare x y = if x == y then EQ else if x <= y then LT else GT
+  x < y = case compare x y of
+    LT -> True
+    _ -> False
+  x <= y = case compare x y of
+    GT -> False
+    _ -> True
+  x > y = case compare x y of
+    GT -> True
+    _ -> False
+  x >= y = case compare x y of
+    LT -> False
+    _ -> True
+  max x y = if x <= y then y else x
+  min x y = if x <= y then x else y
 
 (&&) :: Bool -> Bool -> Bool
 True && x = x
@@ -91,3 +53,85 @@ False || x = x
 not :: Bool -> Bool
 not True = False
 not False = True
+
+instance Eq Int where
+  (==) = primIntEq
+  (/=) = primIntNe
+
+instance Ord Int where
+  compare x y = if primIntLt x y then LT else if primIntEq x y then EQ else GT
+  (<) = primIntLt
+  (<=) = primIntLe
+  (>) = primIntGt
+  (>=) = primIntGe
+
+instance Eq Char where
+  (==) = primCharEq
+  (/=) = primCharNe
+
+instance Ord Char where
+  compare x y = if primCharLt x y then LT else if primCharEq x y then EQ else GT
+  (<) = primCharLt
+  (<=) = primCharLe
+  (>) = primCharGt
+  (>=) = primCharGe
+
+instance Eq Bool where
+  True == True = True
+  False == False = True
+  _ == _ = False
+
+instance Ord Bool where
+  compare False True = LT
+  compare True False = GT
+  compare _ _ = EQ
+
+instance Eq Ordering where
+  LT == LT = True
+  EQ == EQ = True
+  GT == GT = True
+  _ == _ = False
+
+instance Ord Ordering where
+  compare x y = compare (tag x) (tag y)
+    where
+      tag LT = primOrd 'a'
+      tag EQ = primOrd 'b'
+      tag GT = primOrd 'c'
+
+instance Eq () where
+  _ == _ = True
+
+instance Ord () where
+  compare _ _ = EQ
+
+instance (Eq a) => Eq [a] where
+  [] == [] = True
+  (x : xs) == (y : ys) = x == y && xs == ys
+  _ == _ = False
+
+instance (Ord a) => Ord [a] where
+  compare [] [] = EQ
+  compare [] (_ : _) = LT
+  compare (_ : _) [] = GT
+  compare (x : xs) (y : ys) = case compare x y of
+    EQ -> compare xs ys
+    other -> other
+
+instance (Eq a, Eq b) => Eq (a, b) where
+  (a, b) == (c, d) = a == c && b == d
+
+instance (Ord a, Ord b) => Ord (a, b) where
+  compare (a, b) (c, d) = case compare a c of
+    EQ -> compare b d
+    other -> other
+
+instance (Eq a, Eq b, Eq c) => Eq (a, b, c) where
+  (a, b, c) == (d, e, f) = a == d && b == e && c == f
+
+instance (Ord a, Ord b, Ord c) => Ord (a, b, c) where
+  compare (a, b, c) (d, e, f) = case compare a d of
+    EQ -> case compare b e of
+      EQ -> compare c f
+      other -> other
+    other -> other

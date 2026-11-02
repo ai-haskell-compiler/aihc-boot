@@ -1,6 +1,6 @@
 main = let {
     h = let {
-        pat{0} = (,) 1 2;
+        pat{0} = (,) (GHC.Num.fromInteger GHC.Num.({Num Integer}) 1) (GHC.Num.fromInteger GHC.Num.({Num Integer}) 2);
         a = case pat of {
             (,) a b -> a;
           };
@@ -8,15 +8,15 @@ main = let {
             (,) a b -> b;
           };
         k = \ z ->
-            GHC.Num.(+) (GHC.Num.(+) a b) z;
+            GHC.Num.(+) GHC.Num.({Num Integer}) (GHC.Num.(+) GHC.Num.({Num Integer}) a b) z;
       } in
       k;
   } in
-  System.IO.print (GHC.Num.(+) (GHC.List.sum (GHC.List.concatMap (\ x ->
+  System.IO.print GHC.Num.({Show Integer}) (GHC.Num.(+) GHC.Num.({Num Integer}) (Data.Foldable.sum Data.Foldable.({Foldable List}) GHC.Num.({Num Integer}) (GHC.List.concatMap (\ x ->
             let {
-              y = GHC.Num.(*) x x;
+              y = GHC.Num.(*) GHC.Num.({Num Integer}) x x;
             } in
-            case GHC.Real.odd y of {
+            case GHC.Real.odd GHC.Real.({Integral Integer}) y of {
               True -> (:) y [];
               _ -> [];
-            }) (GHC.Enum.enumFromTo 1 10))) (h 3))
+            }) (GHC.Enum.enumFromTo GHC.Enum.({Enum Integer}) (GHC.Num.fromInteger GHC.Num.({Num Integer}) 1) (GHC.Num.fromInteger GHC.Num.({Num Integer}) 10)))) (h (GHC.Num.fromInteger GHC.Num.({Num Integer}) 3)))

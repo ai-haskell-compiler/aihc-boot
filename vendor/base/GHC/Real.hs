@@ -1,21 +1,23 @@
--- | Integer division on Int. The boot base has no classes yet.
+-- | The classes 'Real' and 'Integral', and integer functions.
 module GHC.Real
-  ( div,
-    mod,
-    quot,
-    rem,
-    divMod,
-    quotRem,
+  ( Real,
+    Integral (..),
+    fromIntegral,
     even,
     odd,
     (^),
     gcd,
     lcm,
+    divZeroError,
   )
 where
 
+import GHC.Classes
+import GHC.Enum
+import GHC.Err
 import GHC.Exception.Type
 import GHC.Num
+import GHC.Num.Integer
 import GHC.Prim
 import GHC.Types
 
@@ -23,49 +25,71 @@ infixl 7 `div`, `mod`, `quot`, `rem`
 
 infixr 8 ^
 
--- | The division functions raise 'DivideByZero' when the divisor is
--- zero, as in GHC.
-div :: Int -> Int -> Int
-div x y = if primIntEq y 0 then divZeroError else primIntDiv x y
+-- | The boot base has no Rational, so 'Real' has no methods.
+class (Num a, Ord a) => Real a
 
-mod :: Int -> Int -> Int
-mod x y = if primIntEq y 0 then divZeroError else primIntMod x y
+class (Real a, Enum a) => Integral a where
+  quot, rem, div, mod :: a -> a -> a
+  quotRem, divMod :: a -> a -> (a, a)
+  toInteger :: a -> Integer
+  n `quot` d = case quotRem n d of (q, _) -> q
+  n `rem` d = case quotRem n d of (_, r) -> r
+  n `div` d = case divMod n d of (q, _) -> q
+  n `mod` d = case divMod n d of (_, r) -> r
+  divMod n d =
+    let qr = quotRem n d
+     in case qr of
+          (q, r) -> if signum r == negate (signum d) then (q - 1, r + d) else qr
+  quotRem n d = (quot n d, rem n d)
 
-quot :: Int -> Int -> Int
-quot x y = if primIntEq y 0 then divZeroError else primIntQuot x y
+instance Real Int
 
-rem :: Int -> Int -> Int
-rem x y = if primIntEq y 0 then divZeroError else primIntRem x y
+instance Integral Int where
+  div x y = if primIntEq y 0 then divZeroError else primIntDiv x y
+  mod x y = if primIntEq y 0 then divZeroError else primIntMod x y
+  quot x y = if primIntEq y 0 then divZeroError else primIntQuot x y
+  rem x y = if primIntEq y 0 then divZeroError else primIntRem x y
+  divMod x y = (div x y, mod x y)
+  quotRem x y = (quot x y, rem x y)
+  toInteger = integerFromInt
 
-divMod :: Int -> Int -> (Int, Int)
-divMod x y = (div x y, mod x y)
+instance Real Integer
 
-quotRem :: Int -> Int -> (Int, Int)
-quotRem x y = (quot x y, rem x y)
+instance Integral Integer where
+  div = integerDiv
+  mod = integerMod
+  quot = integerQuot
+  rem = integerRem
+  divMod = integerDivMod
+  quotRem = integerQuotRem
+  toInteger x = x
 
-even :: Int -> Bool
-even x = primIntEq (primIntRem x 2) 0
+fromIntegral :: (Integral a, Num b) => a -> b
+fromIntegral x = fromInteger (toInteger x)
 
-odd :: Int -> Bool
-odd x = primIntNe (primIntRem x 2) 0
+even :: (Integral a) => a -> Bool
+even n = n `rem` 2 == 0
+
+odd :: (Integral a) => a -> Bool
+odd n = not (even n)
 
 -- | Exponentiation with a non-negative exponent.
-(^) :: Int -> Int -> Int
+(^) :: (Num a, Integral b) => a -> b -> a
 x ^ n
-  | primIntLt n 0 = error "Negative exponent"
-  | primIntEq n 0 = 1
+  | n < 0 = errorWithoutStackTrace "Negative exponent"
+  | n == 0 = 1
   | even n = half * half
-  | True = x * (half * half)
+  | otherwise = x * half * half
   where
-    half = x ^ primIntQuot n 2
+    half = x ^ (n `quot` 2)
+    otherwise = True
 
-gcd :: Int -> Int -> Int
+gcd :: (Integral a) => a -> a -> a
 gcd x y = go (abs x) (abs y)
   where
-    go a b = if primIntEq b 0 then a else go b (primIntRem a b)
+    go a b = if b == 0 then a else go b (a `rem` b)
 
-lcm :: Int -> Int -> Int
-lcm x y
-  | primIntEq x 0 = 0
-  | primIntEq y 0 = 0
-  | True = abs (primIntQuot x (gcd x y) * y)
+lcm :: (Integral a) => a -> a -> a
+lcm _ 0 = 0
+lcm 0 _ = 0
+lcm x y = abs ((x `quot` gcd x y) * y)

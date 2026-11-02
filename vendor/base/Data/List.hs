@@ -1,40 +1,110 @@
--- | More list functions. The functions that compare elements take the
--- comparison as an argument, or work on Int: the boot base has no
--- classes yet.
+-- | List functions. As in GHC, the folds are the ones of Foldable.
 module Data.List
-  ( foldl',
-    lines,
-    unlines,
-    words,
-    unwords,
-    intercalate,
+  ( (++),
+    head,
+    last,
+    tail,
+    init,
+    uncons,
+    singleton,
+    null,
+    length,
+    map,
+    reverse,
     intersperse,
-    partition,
-    sortBy,
-    insertBy,
-    sort,
-    nub,
+    intercalate,
     transpose,
+    foldl,
+    foldl',
+    foldl1,
+    foldr,
+    foldr1,
+    concat,
+    concatMap,
+    and,
+    or,
+    any,
+    all,
+    sum,
+    product,
+    maximum,
+    minimum,
+    maximumBy,
+    minimumBy,
+    scanl,
+    scanl1,
+    scanr,
+    scanr1,
+    iterate,
+    repeat,
+    replicate,
+    cycle,
     unfoldr,
-    isPrefixOf,
-    tails,
-    inits,
+    take,
+    drop,
+    splitAt,
+    takeWhile,
+    dropWhile,
+    span,
+    break,
+    stripPrefix,
     group,
     groupBy,
+    inits,
+    tails,
+    isPrefixOf,
+    isSuffixOf,
+    isInfixOf,
+    elem,
+    notElem,
+    lookup,
+    find,
+    filter,
+    partition,
+    (!!),
+    elemIndex,
+    findIndex,
+    zip,
+    zip3,
+    zip4,
+    zipWith,
+    zipWith3,
+    unzip,
+    unzip3,
+    lines,
+    words,
+    unlines,
+    unwords,
+    nub,
+    nubBy,
+    delete,
+    deleteBy,
+    (\\),
+    union,
+    intersect,
+    sort,
+    sortOn,
+    sortBy,
+    insert,
+    insertBy,
+    genericLength,
   )
 where
 
 import Data.Char
-import GHC.Base
+import Data.Foldable
+import GHC.Base hiding (foldr)
 import GHC.Classes
-import GHC.List
+import GHC.List hiding (all, and, any, concat, concatMap, elem, foldl, foldl', foldl1, foldr1, length, maximum, minimum, notElem, null, or, product, sum)
 import GHC.Maybe
-import GHC.Prim
+import GHC.Num
 import GHC.Types
+
+infix 5 \\
 
 lines :: String -> [String]
 lines "" = []
-lines s = case break (eqChar '\n') s of
+lines s = case break (== '\n') s of
   (l, s') -> l : case s' of
     [] -> []
     (_ : s'') -> lines s''
@@ -91,10 +161,16 @@ insertBy cmp x ys@(y : ys') = case cmp x y of
   GT -> y : insertBy cmp x ys'
   _ -> x : ys
 
-sort :: [Int] -> [Int]
+sort :: (Ord a) => [a] -> [a]
 sort = sortBy compare
 
-nub :: [Int] -> [Int]
+sortOn :: (Ord b) => (a -> b) -> [a] -> [a]
+sortOn f = sortBy (\x y -> compare (f x) (f y))
+
+insert :: (Ord a) => a -> [a] -> [a]
+insert = insertBy compare
+
+nub :: (Eq a) => [a] -> [a]
 nub xs = go [] xs
   where
     go _ [] = []
@@ -115,7 +191,7 @@ unfoldr f b = case f b of
   Just (a, b') -> a : unfoldr f b'
   Nothing -> []
 
-isPrefixOf :: [Int] -> [Int] -> Bool
+isPrefixOf :: (Eq a) => [a] -> [a] -> Bool
 isPrefixOf [] _ = True
 isPrefixOf _ [] = False
 isPrefixOf (x : xs) (y : ys) = x == y && isPrefixOf xs ys
@@ -128,10 +204,70 @@ inits :: [a] -> [[a]]
 inits [] = [[]]
 inits (x : xs) = [] : map (x :) (inits xs)
 
-group :: [Int] -> [[Int]]
+group :: (Eq a) => [a] -> [[a]]
 group = groupBy (==)
 
 groupBy :: (a -> a -> Bool) -> [a] -> [[a]]
 groupBy _ [] = []
 groupBy eq (x : xs) = case span (eq x) xs of
   (ys, zs) -> (x : ys) : groupBy eq zs
+
+nubBy :: (a -> a -> Bool) -> [a] -> [a]
+nubBy eq l = go l []
+  where
+    go [] _ = []
+    go (y : ys) xs
+      | any (eq y) xs = go ys xs
+      | otherwise = y : go ys (y : xs)
+
+isSuffixOf :: (Eq a) => [a] -> [a] -> Bool
+isSuffixOf a b = reverse a `isPrefixOf` reverse b
+
+isInfixOf :: (Eq a) => [a] -> [a] -> Bool
+isInfixOf needle haystack = any (isPrefixOf needle) (tails haystack)
+
+stripPrefix :: (Eq a) => [a] -> [a] -> Maybe [a]
+stripPrefix [] ys = Just ys
+stripPrefix (x : xs) (y : ys)
+  | x == y = stripPrefix xs ys
+stripPrefix _ _ = Nothing
+
+delete :: (Eq a) => a -> [a] -> [a]
+delete = deleteBy (==)
+
+deleteBy :: (a -> a -> Bool) -> a -> [a] -> [a]
+deleteBy _ _ [] = []
+deleteBy eq x (y : ys) = if x `eq` y then ys else y : deleteBy eq x ys
+
+(\\) :: (Eq a) => [a] -> [a] -> [a]
+(\\) = foldl (flip delete)
+
+union :: (Eq a) => [a] -> [a] -> [a]
+union xs ys = xs ++ foldl (flip delete) (nub ys) xs
+
+intersect :: (Eq a) => [a] -> [a] -> [a]
+intersect xs ys = [x | x <- xs, any (== x) ys]
+
+elemIndex :: (Eq a) => a -> [a] -> Maybe Int
+elemIndex x = findIndex (== x)
+
+findIndex :: (a -> Bool) -> [a] -> Maybe Int
+findIndex p = go 0
+  where
+    go _ [] = Nothing
+    go i (y : ys) = if p y then Just i else go (i + 1) ys
+
+uncons :: [a] -> Maybe (a, [a])
+uncons [] = Nothing
+uncons (x : xs) = Just (x, xs)
+
+singleton :: a -> [a]
+singleton x = [x]
+
+zip4 :: [a] -> [b] -> [c] -> [d] -> [(a, b, c, d)]
+zip4 (a : as) (b : bs) (c : cs) (d : ds) = (a, b, c, d) : zip4 as bs cs ds
+zip4 _ _ _ _ = []
+
+genericLength :: (Num i) => [a] -> i
+genericLength [] = 0
+genericLength (_ : l) = 1 + genericLength l

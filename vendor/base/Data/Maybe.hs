@@ -14,8 +14,8 @@ module Data.Maybe
 where
 
 import GHC.Base
+import GHC.Err
 import GHC.Maybe
-import GHC.Prim
 import GHC.Types
 
 maybe :: b -> (a -> b) -> Maybe a -> b
