@@ -159,6 +159,59 @@ static int lhs(Parser *p, Lhs *out)
     return p_unexpected(p, "`=` or `|`");
 }
 
+/* `foreign import CALLCONV [SAFETY] ["ENTITY"] f :: t`. A `foreign
+ * export` is not supported. */
+static Decl *foreign_decl(Parser *p)
+{
+    Decl *d = decl_new(DECL_FOREIGN, p_pos(p));
+    const Token *t;
+    Ident *name;
+    p_bump(p);
+    if (!p_eat_keyword(p, KW_IMPORT)) {
+        if (p_at_varid(p, "export")) {
+            p_error(p, xstrdup("foreign export is not supported yet"));
+        } else {
+            p_unexpected(p, "`import`");
+        }
+        return NULL;
+    }
+    t = p_peek(p);
+    if (t->kind != TOK_VARID
+        || !(str_eq(t->text, "ccall") || str_eq(t->text, "capi")
+             || str_eq(t->text, "prim") || str_eq(t->text, "stdcall")
+             || str_eq(t->text, "javascript"))) {
+        p_unexpected(p, "a calling convention");
+        return NULL;
+    }
+    d->callconv = t->text;
+    p_bump(p);
+    t = p_peek(p);
+    if (t->kind == TOK_VARID
+        && (str_eq(t->text, "safe") || str_eq(t->text, "unsafe")
+            || str_eq(t->text, "interruptible"))) {
+        d->safety = t->text;
+        p_bump(p);
+        t = p_peek(p);
+    }
+    if (t->kind == TOK_STRING) {
+        d->entity = (Literal *)xcalloc(1, sizeof(Literal));
+        if (p_literal(p, d->entity) != 0) {
+            return NULL;
+        }
+    }
+    name = sig_name(p);
+    if (name == NULL) {
+        p_unexpected(p, "a name");
+        return NULL;
+    }
+    d->name = *name;
+    if (p_expect_op(p, OP_DOUBLECOLON, "`::`") != 0) {
+        return NULL;
+    }
+    d->ty = p_ty(p);
+    return d->ty ? d : NULL;
+}
+
 /* `f, g :: t`, or a binding. */
 static Decl *sig_or_binding(Parser *p)
 {
@@ -770,8 +823,7 @@ Decl *p_decl(Parser *p, DeclContext ctx)
             p_error(p, xstrdup("standalone deriving is not supported yet"));
             return NULL;
         case KW_FOREIGN:
-            p_error(p, xstrdup("foreign declarations are not supported yet"));
-            return NULL;
+            return foreign_decl(p);
         case KW_DEFAULT:
             if (ctx == CTX_CLASS && next_is_varid_or_paren(p)) {
                 Decl *d = decl_new(DECL_DEFAULT_SIG, pos);

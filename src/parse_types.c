@@ -343,6 +343,7 @@ static Type *paren_type(Parser *p)
     if (p_expect_special(p, ')') != 0) {
         return NULL;
     }
+    t->span = p_span_from(p, start);
     return t;
 }
 

@@ -126,6 +126,7 @@ static Pat *lpat(Parser *p)
     if (p_at_varsym(p, "-")) {
         Pat *l = pat_new(PAT_LIT);
         p_bump(p);
+        l->span = p_token_span(p);
         if (p_literal(p, &l->lit) != 0) {
             return NULL;
         }
@@ -427,6 +428,7 @@ Pat *p_apat(Parser *p)
     case TOK_CHAR:
     case TOK_STRING:
         r = pat_new(PAT_LIT);
+        r->span = p_token_span(p);
         if (p_literal(p, &r->lit) != 0) {
             return NULL;
         }

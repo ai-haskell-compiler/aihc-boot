@@ -485,6 +485,22 @@ static void pr_decl(StrBuf *out, const Decl *d)
     size_t i;
 
     switch (d->kind) {
+    case DECL_FOREIGN:
+        sb_puts(out, "foreign import ");
+        sb_puts(out, d->callconv);
+        sb_putc(out, ' ');
+        if (d->safety != NULL) {
+            sb_puts(out, d->safety);
+            sb_putc(out, ' ');
+        }
+        if (d->entity != NULL) {
+            pr_literal(out, d->entity);
+            sb_putc(out, ' ');
+        }
+        var_name(out, "", d->name.name);
+        sb_puts(out, " :: ");
+        pr_ty(out, d->ty);
+        break;
     case DECL_TYPE_SIG:
         ident_names(out, &d->names);
         sb_puts(out, " :: ");

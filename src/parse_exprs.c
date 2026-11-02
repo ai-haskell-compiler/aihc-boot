@@ -387,6 +387,7 @@ static Expr *aexp1(Parser *p)
     case TOK_CHAR:
     case TOK_STRING:
         e = expr_new(EXPR_LIT);
+        e->span = p_token_span(p);
         return p_literal(p, &e->lit) == 0 ? e : NULL;
     case TOK_CONID:
         return name_expr(EXPR_CON, p_gcon(p));
@@ -458,6 +459,7 @@ static Expr *paren_exp(Parser *p)
     Vec items;
     int all_some = 1;
     Expr *r;
+    Pos start = p_pos(p);
     if (p_expect_special(p, '(') != 0) {
         return NULL;
     }
@@ -526,6 +528,7 @@ static Expr *paren_exp(Parser *p)
     }
     r = expr_new(all_some ? EXPR_TUPLE : EXPR_TUPLE_SECTION);
     r->items = items;
+    r->span = p_span_from(p, start);
     return r;
 }
 
@@ -547,6 +550,7 @@ static int seq_end(Parser *p, Expr **to)
 static Expr *bracket_exp(Parser *p)
 {
     Expr *first, *r;
+    Pos start = p_pos(p);
     if (p_expect_special(p, '[') != 0) {
         return NULL;
     }
@@ -596,7 +600,11 @@ static Expr *bracket_exp(Parser *p)
             vec_push(&r->items, e);
         }
     }
-    return p_expect_special(p, ']') == 0 ? r : NULL;
+    if (p_expect_special(p, ']') != 0) {
+        return NULL;
+    }
+    r->span = p_span_from(p, start);
+    return r;
 }
 
 /* --- Statements -------------------------------------------------------- */

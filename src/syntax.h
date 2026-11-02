@@ -413,7 +413,9 @@ typedef enum {
     DECL_INSTANCE,      /* ty body: the head is a type with any forall
                            and context */
     DECL_BIND,          /* lhs rhs: `f x = e`, `(a, b) = e` */
-    DECL_PAT_SYN        /* patsyn dir body (for PATSYN_EXPLICIT) pat */
+    DECL_PAT_SYN,       /* patsyn dir body (for PATSYN_EXPLICIT) pat */
+    DECL_FOREIGN        /* callconv safety entity name ty:
+                           `foreign import prim "e" f :: t` */
 } DeclKind;
 
 struct Decl {
@@ -441,6 +443,9 @@ struct Decl {
     PatSynLhs patsyn;
     PatSynDirKind dir;
     Pat *pat;       /* DECL_PAT_SYN */
+    char *callconv; /* DECL_FOREIGN: `ccall`, `capi` or `prim` */
+    char *safety;   /* optional: `safe`, `unsafe` or `interruptible` */
+    Literal *entity; /* optional: the string before the name */
 };
 
 /* --- Bindings --- */
@@ -503,6 +508,7 @@ struct Pat {
     int wildcard;
     Expr *expr;
     Type *ty;
+    Span span; /* PAT_LIT only: the literal, without a minus sign */
 };
 
 /* --- Expressions --- */
@@ -578,6 +584,9 @@ struct Expr {
     Vec items;  /* Expr * */
     Vec fields; /* FieldUpdate * */
     int wildcard;
+    Span span;  /* EXPR_LIT, EXPR_LIST, EXPR_TUPLE and EXPR_TUPLE_SECTION
+                   only: the whole expression; the resolver reports the
+                   syntax terms of these at this span */
 };
 
 Type *type_new(TypeKind kind);
