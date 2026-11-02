@@ -562,7 +562,6 @@ static void tc_con_pat(Tc *tc, const Pat *p, const QName *cname, const Pat **arg
 
 static void tc_fnode_pat(Tc *tc, const FNode *n, Ty *ty, PatGivens *g)
 {
-    const Pat *args[2];
     if (n->kind == FN_LEAF) {
         tc_pat(tc, (const Pat *)n->leaf, ty, g);
         return;
@@ -571,9 +570,6 @@ static void tc_fnode_pat(Tc *tc, const FNode *n, Ty *ty, PatGivens *g)
         tc_fail(tc, xstrdup("negation in a pattern chain"));
     }
     {
-        /* The operands are checked as patterns through temporary nodes. */
-        Pat *l = pat_new(PAT_PAREN);
-        Pat *r = pat_new(PAT_PAREN);
         TcCon *con = tc_con(tc, n->op);
         Ty *lt;
         Ty *rt;
@@ -596,9 +592,6 @@ static void tc_fnode_pat(Tc *tc, const FNode *n, Ty *ty, PatGivens *g)
         rt = ty_subst((Ty *)con->fields.items[1], &con->univ, &univ);
         tc_fnode_pat(tc, n->l, lt, g);
         tc_fnode_pat(tc, n->r, rt, g);
-        (void)l;
-        (void)r;
-        (void)args;
     }
 }
 
@@ -774,18 +767,16 @@ static void tc_pat(Tc *tc, const Pat *p, Ty *ty, PatGivens *g)
     }
 }
 
-/* Check a pattern that brings no givens, or fail. */
-static void tc_pat_simple(Tc *tc, const Pat *p, Ty *ty)
+/* Check the pattern of a statement. The givens of an existential
+ * constructor stay in scope for the rest of the statements: the caller
+ * restores tc->givens at the end of the block. */
+static void tc_pat_stmt(Tc *tc, const Pat *p, Ty *ty)
 {
     PatGivens g;
     pg_init(&g);
     tc_pat(tc, p, ty, &g);
     if (g.preds.len > 0) {
         push_given_evs(tc, &g.preds, &g.evs);
-        /* The scope ends with the enclosing construct; callers that use
-         * this function pop nothing, so keep the givens for the rest of
-         * the module part. This happens only with existential
-         * constructors in do statements and guards. */
     }
 }
 
@@ -807,7 +798,7 @@ static void tc_guards(Tc *tc, const GuardedRhs *g, Ty *ty)
         case STMT_BIND: {
             Ty *t = ty_meta(tc);
             tc_expr(tc, s->expr, t);
-            tc_pat_simple(tc, s->pat, t);
+            tc_pat_stmt(tc, s->pat, t);
             break;
         }
         case STMT_LET:
@@ -882,7 +873,7 @@ static void tc_do(Tc *tc, const Vec *stmts, Ty *m, Ty *expected)
                 tc_fail(tc, xstrdup("the last statement of a do block must be an expression"));
             }
             tc_expr(tc, s->expr, ty_app(m, t));
-            tc_pat_simple(tc, s->pat, t);
+            tc_pat_stmt(tc, s->pat, t);
             break;
         }
         case STMT_LET:
@@ -911,7 +902,7 @@ static void tc_comp(Tc *tc, const Expr *body, const Vec *stmts, Ty *elem)
         case STMT_BIND: {
             Ty *t = ty_meta(tc);
             tc_expr(tc, s->expr, ty_list(tc, t));
-            tc_pat_simple(tc, s->pat, t);
+            tc_pat_stmt(tc, s->pat, t);
             break;
         }
         case STMT_LET:

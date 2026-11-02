@@ -360,23 +360,6 @@ static int bind_meta(Tc *tc, Ty *m, Ty *t)
     return 0;
 }
 
-static int has_fam(Ty *t)
-{
-    size_t i;
-    t = prune(t);
-    switch (t->kind) {
-    case T_FAM:
-        return 1;
-    case T_APP:
-        return has_fam(t->fun) || has_fam(t->arg);
-    case T_FORALL:
-        return has_fam(t->body);
-    default:
-        (void)i;
-        return 0;
-    }
-}
-
 static int unify_rec(Tc *tc, Ty *a, Ty *b)
 {
     size_t i;
@@ -447,7 +430,6 @@ void unify(Tc *tc, Ty *a, Ty *b)
         Ty *zb = zonk(tc, b);
         tc_fail(tc, str_printf("cannot match the type %s with %s", ty_str(za), ty_str(zb)));
     }
-    (void)has_fam;
 }
 
 int ty_equal(Tc *tc, Ty *a, Ty *b)
@@ -664,12 +646,6 @@ Ty *instantiate(Tc *tc, Ty *t, Vec *evs)
 
 static void print_prec(StrBuf *b, Ty *t, int prec);
 
-static int is_con_named(Ty *t, const char *name)
-{
-    t = prune(t);
-    return t->kind == T_CON && str_eq(t->con->name, name);
-}
-
 static void print_pred(StrBuf *b, const TcPred *p)
 {
     size_t i;
@@ -786,7 +762,6 @@ static void print_prec(StrBuf *b, Ty *t, int prec)
         }
         return;
     }
-    (void)is_con_named;
 }
 
 void ty_print(StrBuf *b, Ty *t)

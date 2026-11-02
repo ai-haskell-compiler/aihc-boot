@@ -70,13 +70,13 @@ TcEv *tc_ev(TcEv *e);
  *
  * - QName of a variable or constructor occurrence: evs are the
  *   dictionaries that the occurrence takes, in order.
- * - Expr: EXPR_LIT: evs[0] is the Num (or IsString) dictionary; int_lit
- *   is 1 when the literal has type Int. EXPR_NEG: evs[0] is the Num
+ * - Expr: EXPR_LIT: evs[0] is the Num (or IsString) dictionary.
+ *   EXPR_NEG: evs[0] is the Num
  *   dictionary. EXPR_DO: evs[0] is the Monad dictionary. EXPR_ARITH_SEQ:
  *   evs[0] is the Enum dictionary. EXPR_APP: evs are dictionaries that
  *   the result of the application takes (a rank-n field).
- * - Pat: PAT_LIT: evs are the Eq and the Num dictionary; int_lit is 1
- *   when the literal has type Int. PAT_CON: dicts are the dictionary
+ * - Pat: PAT_LIT: evs are the Eq and the Num (or IsString) dictionary.
+ *   PAT_CON: dicts are the dictionary
  *   variables that an existential constructor binds before its fields.
  * - Decl (the first clause of a binding): dicts are the dictionary
  *   parameters of the binding.
@@ -89,7 +89,6 @@ struct TcNote {
     Vec lams;  /* const char *: Expr only: the expression takes these
                   dictionaries (it was checked against a type with a
                   context) */
-    int int_lit;
 };
 
 TcNote *tc_note_new(void);
@@ -168,8 +167,8 @@ typedef struct Tc Tc;
 
 Tc *tc_new(const Program *p);
 
-/* Typecheck the modules of a package. The package's dependencies must
- * be typechecked already. Returns the number of modules. */
+/* Typecheck the modules of a package, each after the modules it
+ * imports. The package's dependencies must be typechecked already. */
 void tc_package(Tc *tc, const Package *package);
 
 /* The error of a module, or NULL when it typechecked. Sets *pos (line 0

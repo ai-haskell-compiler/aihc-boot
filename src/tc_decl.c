@@ -815,11 +815,7 @@ static void fill_class(Tc *tc, const Decl *d, TcClass *c)
         }
     }
     tc->tyvars.len = 0;
-    (void)j;
 }
-
-/* Functional dependencies: the parser keeps them in the class's kind
- * signature slot? No: they are not parsed yet. */
 
 /* --- Instances --------------------------------------------------------------------- */
 
