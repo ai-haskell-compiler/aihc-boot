@@ -1,0 +1,1 @@
+aihc-boot: tests/syntax/parse-error-type.hs:1:11: parse: expected an import item, found `type`

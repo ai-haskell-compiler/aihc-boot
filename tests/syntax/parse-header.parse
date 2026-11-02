@@ -1,0 +1,322 @@
+Module {
+    pos: Pos {
+        line: 1,
+        col: 1,
+    },
+    pragmas: [
+        "LANGUAGE CPP",
+    ],
+    name: "Data.Foo.Bar",
+    exports: Some(
+        [
+            Var(
+                QName {
+                    qual: "",
+                    name: "a",
+                    span: Span {
+                        start: Pos {
+                            line: 2,
+                            col: 22,
+                        },
+                        end: Pos {
+                            line: 2,
+                            col: 23,
+                        },
+                    },
+                },
+            ),
+            Thing {
+                name: QName {
+                    qual: "",
+                    name: "B",
+                    span: Span {
+                        start: Pos {
+                            line: 2,
+                            col: 25,
+                        },
+                        end: Pos {
+                            line: 2,
+                            col: 26,
+                        },
+                    },
+                },
+                subs: None,
+                explicit_type: false,
+            },
+            Thing {
+                name: QName {
+                    qual: "",
+                    name: "C",
+                    span: Span {
+                        start: Pos {
+                            line: 2,
+                            col: 28,
+                        },
+                        end: Pos {
+                            line: 2,
+                            col: 29,
+                        },
+                    },
+                },
+                subs: All,
+                explicit_type: false,
+            },
+            Thing {
+                name: QName {
+                    qual: "",
+                    name: "D",
+                    span: Span {
+                        start: Pos {
+                            line: 2,
+                            col: 35,
+                        },
+                        end: Pos {
+                            line: 2,
+                            col: 36,
+                        },
+                    },
+                },
+                subs: Some(
+                    [
+                        "E",
+                        "f",
+                    ],
+                ),
+                explicit_type: false,
+            },
+            Var(
+                QName {
+                    qual: "",
+                    name: "+",
+                    span: Span {
+                        start: Pos {
+                            line: 2,
+                            col: 44,
+                        },
+                        end: Pos {
+                            line: 2,
+                            col: 47,
+                        },
+                    },
+                },
+            ),
+            Module(
+                "M",
+            ),
+            Pattern(
+                QName {
+                    qual: "",
+                    name: "P",
+                    span: Span {
+                        start: Pos {
+                            line: 2,
+                            col: 67,
+                        },
+                        end: Pos {
+                            line: 2,
+                            col: 68,
+                        },
+                    },
+                },
+            ),
+            Thing {
+                name: QName {
+                    qual: "",
+                    name: ":+",
+                    span: Span {
+                        start: Pos {
+                            line: 2,
+                            col: 75,
+                        },
+                        end: Pos {
+                            line: 2,
+                            col: 79,
+                        },
+                    },
+                },
+                subs: None,
+                explicit_type: true,
+            },
+            Thing {
+                name: QName {
+                    qual: "",
+                    name: "S",
+                    span: Span {
+                        start: Pos {
+                            line: 2,
+                            col: 81,
+                        },
+                        end: Pos {
+                            line: 2,
+                            col: 82,
+                        },
+                    },
+                },
+                subs: AllAnd(
+                    [
+                        "P",
+                    ],
+                ),
+                explicit_type: false,
+            },
+        ],
+    ),
+    imports: [
+        Import {
+            pos: Pos {
+                line: 3,
+                col: 1,
+            },
+            module: "A",
+            qualified: No,
+            package: None,
+            alias: None,
+            hiding: false,
+            items: None,
+        },
+        Import {
+            pos: Pos {
+                line: 4,
+                col: 1,
+            },
+            module: "B",
+            qualified: Pre,
+            package: None,
+            alias: Some(
+                "C",
+            ),
+            hiding: false,
+            items: None,
+        },
+        Import {
+            pos: Pos {
+                line: 5,
+                col: 1,
+            },
+            module: "D",
+            qualified: Post,
+            package: None,
+            alias: Some(
+                "E",
+            ),
+            hiding: false,
+            items: None,
+        },
+        Import {
+            pos: Pos {
+                line: 6,
+                col: 1,
+            },
+            module: "F",
+            qualified: No,
+            package: None,
+            alias: None,
+            hiding: false,
+            items: Some(
+                [
+                    Var(
+                        "x",
+                    ),
+                    Thing {
+                        name: "Y",
+                        subs: All,
+                        explicit_type: false,
+                    },
+                    Thing {
+                        name: "Z",
+                        subs: Some(
+                            [
+                                "a",
+                                "B",
+                            ],
+                        ),
+                        explicit_type: false,
+                    },
+                    Var(
+                        "<|>",
+                    ),
+                    Pattern(
+                        "P",
+                    ),
+                    Thing {
+                        name: "+",
+                        subs: None,
+                        explicit_type: true,
+                    },
+                ],
+            ),
+        },
+        Import {
+            pos: Pos {
+                line: 7,
+                col: 1,
+            },
+            module: "G",
+            qualified: No,
+            package: None,
+            alias: None,
+            hiding: true,
+            items: Some(
+                [
+                    Var(
+                        "null",
+                    ),
+                ],
+            ),
+        },
+        Import {
+            pos: Pos {
+                line: 8,
+                col: 1,
+            },
+            module: "H",
+            qualified: No,
+            package: None,
+            alias: None,
+            hiding: false,
+            items: None,
+        },
+        Import {
+            pos: Pos {
+                line: 9,
+                col: 1,
+            },
+            module: "Prelude",
+            qualified: No,
+            package: Some(
+                "base",
+            ),
+            alias: None,
+            hiding: false,
+            items: None,
+        },
+        Import {
+            pos: Pos {
+                line: 10,
+                col: 1,
+            },
+            module: "A",
+            qualified: No,
+            package: None,
+            alias: None,
+            hiding: false,
+            items: Some(
+                [
+                    Var(
+                        "as",
+                    ),
+                    Var(
+                        "hiding",
+                    ),
+                    Var(
+                        "qualified",
+                    ),
+                    Var(
+                        "pattern",
+                    ),
+                ],
+            ),
+        },
+    ],
+    decls: [],
+}

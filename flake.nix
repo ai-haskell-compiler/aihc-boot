@@ -77,20 +77,19 @@
     # count modules through them.
     trackerTools = pkgs: [pkgs.python3 pkgs.git pkgs.bash (aihcParse pkgs) (resolveOracle pkgs)];
 
-    # The boot compiler itself. `cargoLock` reads the committed Cargo.lock,
-    # so the build is reproducible and works without network access.
+    # The boot compiler itself: plain C89, built with make. `make check`
+    # runs the golden tests and the round trip over the vendored tree.
+    # The Makefile compiles with -std=c89 -pedantic -Werror, so the build
+    # also enforces the language standard.
     aihcBoot = pkgs:
-      pkgs.rustPlatform.buildRustPackage {
+      pkgs.stdenv.mkDerivation {
         pname = "aihc-boot";
         version = "0.1.0";
         src = self;
-        cargoLock.lockFile = ./Cargo.lock;
-        nativeCheckInputs = [pkgs.clippy pkgs.rustfmt];
-        # `cargo test` runs in checkPhase. Add the linter and the
-        # formatter, so `nix flake check` enforces both.
-        postCheck = ''
-          cargo fmt --check
-          cargo clippy --all-targets --offline -- -D warnings
+        doCheck = true;
+        checkTarget = "check";
+        installPhase = ''
+          install -D build/aihc-boot $out/bin/aihc-boot
         '';
       };
 
@@ -152,12 +151,9 @@
             (aihcParseGhc pkgs)
             pkgs.cabal-install
             pkgs.curl
-            # The boot compiler is written in Rust.
-            pkgs.cargo
-            pkgs.rustc
-            pkgs.clippy
-            pkgs.rustfmt
-            pkgs.rust-analyzer
+            # The boot compiler is written in C89. mkShell already
+            # provides a C compiler and make.
+            pkgs.gnumake
           ]
           # The boot C compiler. It is only `tcc`: `cc` stays the stdenv
           # compiler, because GHC and cabal use it.
@@ -188,7 +184,7 @@
 
     checks = forAllSystems (pkgs:
       {
-        # Build, test, lint and format-check the Rust workspace.
+        # Build and test the boot compiler.
         aihc-boot = aihcBoot pkgs;
 
         # The tracker must run on a clean checkout without the boot compiler.

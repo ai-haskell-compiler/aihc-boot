@@ -28,7 +28,7 @@
 [compiler]
 # Command that runs the boot compiler. `AIHC_BOOT` in the environment
 # overrides it. See docs/PLAN.md, "Compiler interface", for the contract.
-command = ["./target/release/aihc-boot"]
+command = ["./build/aihc-boot"]
 stage_timeout = 1800 # seconds per `check --stage` run (one package)
 eval_timeout = 60    # seconds per eval test
 stage1_timeout = 3600

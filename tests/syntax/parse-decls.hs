@@ -1,0 +1,38 @@
+module M where
+f, (+) :: a -> Int
+infixl 6 +, `plus`
+infix -
+infixr 5 :
+data List a = [] | a : List a
+data (:+:) f g p = L1 (f p)
+data T a = C !Int (Maybe a) | a :+ a | R { f, g :: {-# UNPACK #-} !a, h :: Int }
+  deriving (Show, Eq)
+  deriving stock Ord
+newtype N = N Int deriving newtype (Num)
+data E = forall a. Show a => C a | D ~Int
+data K :: Type -> Type
+class Eq a => C a where
+  m :: a -> Int
+  default m :: Show a => a -> Int
+  {-# MINIMAL m #-}
+  type F a :: Type
+instance C Int where
+  type F Int = Bool
+instance forall a. Show a => C [a]
+type F = forall a. (Eq a, Show a) => [a] -> (a, Maybe a) -> M.T @k '[a] (t :: k) _ "s" (a `E` b) (a ~ b) 'Just '[] ((->) a) (,) () [Int, Bool] 3
+type family G (a :: Type) :: Type
+type instance G Int = Char
+f x (Just y) = x
+(<+>) a b = a
+x `plus` y = x
+(a, b) = (1, 2)
+!z = 3
+g x
+  | x > 0, Just y <- h x = y
+  | otherwise = 0
+  where h = Just
+pattern P x = Just x
+pattern x :< xs <- (uncons -> Just (x, xs))
+pattern Q {a, b} <- (a, b) where
+  Q a b = (a, b)
+pattern R, S :: Int
