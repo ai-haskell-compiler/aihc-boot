@@ -1,0 +1,25 @@
+name: Bootstrap
+
+# Build the boot C compiler (TinyCC on musl) from the hex0 seed.
+# The job turns off binary substitutes, so Nix builds every stage of the
+# chain from source. Run it by hand from the Actions tab.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  full-chain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build the chain from the seed and run the C89 check
+        run: >
+          nix build -L
+          --option substitute false
+          .#checks.x86_64-linux.boot-cc
+      - name: Show the compiler version
+        run: |
+          nix build --option substitute false .#packages.x86_64-linux.boot-cc
+          ./result/bin/tcc -v

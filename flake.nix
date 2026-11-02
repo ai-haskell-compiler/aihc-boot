@@ -92,6 +92,51 @@
           install -D build/aihc-boot $out/bin/aihc-boot
         '';
       };
+
+    # The boot C compiler: TinyCC on musl, from nixpkgs' minimal-bootstrap.
+    # The chain starts from a 181-byte machine-code seed (hex0) and builds
+    # the assemblers, M2-Planet, GNU Mes, TinyCC and musl from source. No
+    # other compiler binary is part of it. See docs/BOOTSTRAP.md.
+    # nixpkgs has tinycc-musl for x86_64-linux and i686-linux. The flake
+    # builds for x86_64-linux only.
+    bootCCSystems = ["x86_64-linux"];
+    hasBootCC = pkgs: builtins.elem pkgs.stdenv.hostPlatform.system bootCCSystems;
+
+    # `tcc` links statically against musl. The wrapper is built with the
+    # bootstrap bash, so the closure has no stdenv binaries.
+    bootCC = pkgs: let
+      mb = pkgs.minimal-bootstrap;
+      tcc = mb.tinycc-musl;
+    in
+      mb.bash.runCommand "boot-cc-${tcc.compiler.version}" {} ''
+        mkdir -p $out/bin
+        cat > $out/bin/tcc <<EOF
+        #!${mb.bash}/bin/bash
+        # "tcc -ar" must keep -ar as the first argument.
+        if [ "\$1" = "-ar" ]; then
+          exec ${tcc.compiler}/bin/tcc "\$@"
+        fi
+        exec ${tcc.compiler}/bin/tcc -B${tcc.libs}/lib -static "\$@"
+        EOF
+        chmod 555 $out/bin/tcc
+      '';
+
+    # Compile and run a C89 program with the boot C compiler. This
+    # derivation also uses only the bootstrap chain.
+    bootCCCheck = pkgs: let
+      mb = pkgs.minimal-bootstrap;
+    in
+      mb.bash.runCommand "boot-cc-check" {} ''
+        ${bootCC pkgs}/bin/tcc -Wall -Werror -o hello ${./tests/boot-cc/hello.c}
+        out_text=$(./hello)
+        expected=$(printf 'sum=55\nerror 42\nhello from tcc')
+        if [ "$out_text" != "$expected" ]; then
+          echo "unexpected output:"
+          echo "$out_text"
+          exit 1
+        fi
+        echo "$out_text" > $out
+      '';
   in {
     formatter = forAllSystems (pkgs: pkgs.alejandra);
 
@@ -109,17 +154,24 @@
             # The boot compiler is written in C89. mkShell already
             # provides a C compiler and make.
             pkgs.gnumake
-          ];
+          ]
+          # The boot C compiler. It is only `tcc`: `cc` stays the stdenv
+          # compiler, because GHC and cabal use it.
+          ++ pkgs.lib.optional (hasBootCC pkgs) (bootCC pkgs);
       };
       tracker = pkgs.mkShell {packages = trackerTools pkgs;};
     });
 
-    packages = forAllSystems (pkgs: {
-      default = aihcBoot pkgs;
-      aihc-boot = aihcBoot pkgs;
-      aihc-parse = aihcParse pkgs;
-      resolve-oracle = resolveOracle pkgs;
-    });
+    packages = forAllSystems (pkgs:
+      {
+        default = aihcBoot pkgs;
+        aihc-boot = aihcBoot pkgs;
+        aihc-parse = aihcParse pkgs;
+        resolve-oracle = resolveOracle pkgs;
+      }
+      // pkgs.lib.optionalAttrs (hasBootCC pkgs) {
+        boot-cc = bootCC pkgs;
+      });
 
     apps = forAllSystems (pkgs: {
       progress = {
@@ -130,15 +182,20 @@
       };
     });
 
-    checks = forAllSystems (pkgs: {
-      # Build and test the boot compiler.
-      aihc-boot = aihcBoot pkgs;
+    checks = forAllSystems (pkgs:
+      {
+        # Build and test the boot compiler.
+        aihc-boot = aihcBoot pkgs;
 
-      # The tracker must run on a clean checkout without the boot compiler.
-      progress = pkgs.runCommand "progress-check" {nativeBuildInputs = trackerTools pkgs;} ''
-        cp -r ${self} src && chmod -R u+w src && cd src
-        python3 scripts/progress.py --no-compiler > $out
-      '';
-    });
+        # The tracker must run on a clean checkout without the boot compiler.
+        progress = pkgs.runCommand "progress-check" {nativeBuildInputs = trackerTools pkgs;} ''
+          cp -r ${self} src && chmod -R u+w src && cd src
+          python3 scripts/progress.py --no-compiler > $out
+        '';
+      }
+      // pkgs.lib.optionalAttrs (hasBootCC pkgs) {
+        # The boot C compiler compiles and runs a C89 program.
+        boot-cc = bootCCCheck pkgs;
+      });
   };
 }
