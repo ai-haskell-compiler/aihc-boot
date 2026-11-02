@@ -26,7 +26,9 @@
 
 #include "desugar.h"
 #include "eval.h"
+#include "fixity.h"
 #include "syntax.h"
+#include "tc.h"
 
 /* --- State -------------------------------------------------------------- */
 
@@ -43,11 +45,6 @@ typedef struct {
     const char *name;
     VarRef var;
 } Local;
-
-typedef struct {
-    int prec;
-    Assoc assoc;
-} Fixity;
 
 /* A module of some package, with the package's extensions. */
 typedef struct {
@@ -69,6 +66,8 @@ typedef struct {
 
 typedef struct {
     const Program *program;
+    const Tc *tc;
+    StrMap dict_cons; /* "MODULE\tCLASS" -> ConInfo *: class dictionaries */
     StrMap sources;  /* module name -> ModSrc * */
     StrMap globals;  /* "MODULE\tNAME" -> Global * */
     StrMap cons;     /* "MODULE\tNAME" -> ConInfo * */
@@ -169,7 +168,15 @@ static Core *var_code(const Ds *ds, VarRef v)
 
 static const Entity *lookup_entity(const Ds *ds, const char *qual, const char *name)
 {
-    const Scope *scope = scope_qualifier(ds->scope, qual);
+    const Scope *scope;
+    if (qual[0] == TC_DIRECT) {
+        Entity *e = (Entity *)xmalloc(sizeof *e);
+        e->package = "";
+        e->module = qual + 1;
+        e->name = name;
+        return e;
+    }
+    scope = scope_qualifier(ds->scope, qual);
     if (scope == NULL) {
         return NULL;
     }
@@ -355,9 +362,71 @@ static Core *name_code(Ds *ds, const char *qual, const char *name)
     return core_global(global_of(ds, e->module, e->name));
 }
 
+static ConInfo *dict_con(Ds *ds, const TcClass *cls);
+static char *super_name(const TcClass *cls, size_t i);
+
+/* The Core of a dictionary. */
+static Core *ev_code(Ds *ds, TcEv *ev)
+{
+    Vec args;
+    size_t i;
+    ev = tc_ev(ev);
+    switch (ev->kind) {
+    case EV_VAR: {
+        const Local *l = lookup_local(ds, ev->var);
+        if (l == NULL) {
+            fail_at(ds, str_printf("internal error: the dictionary %s is not in scope", ev->var));
+        }
+        return var_code(ds, l->var);
+    }
+    case EV_INST:
+        vec_init(&args);
+        for (i = 0; i < ev->args.len; i++) {
+            vec_push(&args, ev_code(ds, (TcEv *)ev->args.items[i]));
+        }
+        return core_app(core_global(global_of(ds, ev->inst->module, ev->inst->name)), &args);
+    case EV_SUPER:
+        return core_app1(core_global(global_of(ds, ev->cls->module,
+                                               super_name(ev->cls, (size_t)ev->index))),
+                         ev_code(ds, ev->of));
+    case EV_TYPEREP: {
+        /* Typeable: a dictionary whose method returns the TypeRep. */
+        ConInfo *rep = known_con(ds, "Data.Typeable.Internal", "TypeRep");
+        Vec fields;
+        Vec one;
+        Core *lam;
+        vec_init(&one);
+        vec_push(&one, core_str(ev->rep, strlen(ev->rep)));
+        lam = core_lam(1, core_con(rep, &one));
+        vec_push(&lam->names, xstrdup("proxy"));
+        vec_init(&fields);
+        vec_push(&fields, lam);
+        return core_con(dict_con(ds, ev->cls), &fields);
+    }
+    default:
+        fail_at(ds, xstrdup("internal error: an unsolved constraint"));
+        return NULL;
+    }
+}
+
+/* Apply the dictionaries of a note's evs to code. */
+static Core *apply_evs(Ds *ds, Core *code, const TcNote *note)
+{
+    Vec args;
+    size_t i;
+    if (note == NULL || note->evs.len == 0) {
+        return code;
+    }
+    vec_init(&args);
+    for (i = 0; i < note->evs.len; i++) {
+        vec_push(&args, ev_code(ds, (TcEv *)note->evs.items[i]));
+    }
+    return core_app(code, &args);
+}
+
 static Core *qname_code(Ds *ds, const QName *name)
 {
-    return name_code(ds, name->qual, bare(name->name));
+    return apply_evs(ds, name_code(ds, name->qual, bare(name->name)), name->note);
 }
 
 /* Whether an operator or a name in an expression is a constructor. */
@@ -406,7 +475,7 @@ static Core *fail_code(Ds *ds, Fail f)
         vec_init(&none);
         return core_con(ds->out->con_nil, &none);
     default:
-        return core_app1(known_global(ds, "GHC.Prim", "error"),
+        return core_app1(known_global(ds, "GHC.Err", "error"),
                          core_str(f.message, strlen(f.message)));
     }
 }
@@ -448,14 +517,24 @@ static long parse_integer(Ds *ds, const char *raw)
     return (long)value;
 }
 
-static Core *literal_code(Ds *ds, const Literal *lit)
+static Core *literal_code(Ds *ds, const Literal *lit, const TcNote *note)
 {
     switch (lit->kind) {
     case LIT_INTEGER:
+        if (note != NULL && note->evs.len > 0 && !tc_ev_is_int((TcEv *)note->evs.items[0])) {
+            return core_app2(known_global(ds, "GHC.Num", "fromInteger"),
+                             ev_code(ds, (TcEv *)note->evs.items[0]),
+                             core_int(parse_integer(ds, lit->raw)));
+        }
         return core_int(parse_integer(ds, lit->raw));
     case LIT_CHAR:
         return core_char(lit->ch);
     case LIT_STRING:
+        if (note != NULL && note->evs.len > 0) {
+            return core_app2(known_global(ds, "Data.String", "fromString"),
+                             ev_code(ds, (TcEv *)note->evs.items[0]),
+                             core_str(lit->value, lit->value_len));
+        }
         return core_str(lit->value, lit->value_len);
     default:
         unsupported_here(ds, "a floating point literal");
@@ -465,149 +544,30 @@ static Core *literal_code(Ds *ds, const Literal *lit)
 
 /* --- Fixity resolution -------------------------------------------------- */
 
-static Fixity default_fixity(void)
-{
-    Fixity f;
-    f.prec = 9;
-    f.assoc = ASSOC_LEFT;
-    return f;
-}
-
 static Fixity op_fixity(Ds *ds, const QName *op)
 {
     const char *name = bare(op->name);
     const Entity *e;
     const Fixity *f;
     if (op->qual[0] == '\0' && lookup_local(ds, name) != NULL) {
-        return default_fixity();
+        return fixity_default();
     }
     e = lookup_entity(ds, op->qual, name);
     if (e == NULL) {
-        return default_fixity();
+        return fixity_default();
     }
     f = (const Fixity *)strmap_get(&ds->fixities, key(e->module, e->name));
-    return f != NULL ? *f : default_fixity();
+    return f != NULL ? *f : fixity_default();
 }
 
-typedef enum { FT_EXP, FT_OP, FT_NEG } FTokKind;
-
-typedef struct {
-    FTokKind kind;
-    const void *exp;
-    const QName *op;
-    Fixity fix;
-} FTok;
-
-typedef enum { FN_LEAF, FN_BIN, FN_NEG } FNodeKind;
-
-typedef struct FNode FNode;
-struct FNode {
-    FNodeKind kind;
-    const void *leaf;
-    const QName *op;
-    FNode *l;
-    FNode *r;
-};
-
-typedef struct {
-    FTok *toks;
-    size_t n;
-    size_t pos;
-} FixParser;
-
-static FNode *fnode(FNodeKind kind)
+static FNode *resolve_fixity(Ds *ds, const Vec *toks)
 {
-    FNode *n = (FNode *)xcalloc(1, sizeof *n);
-    n->kind = kind;
+    char *err = NULL;
+    FNode *n = fixity_resolve(toks, &err);
+    if (n == NULL) {
+        fail_at(ds, err);
+    }
     return n;
-}
-
-static FNode *fix_parse(Ds *ds, FixParser *p, Fixity op1);
-
-/* The algorithm of the Haskell 2010 report, section 10.6. */
-static FNode *fix_parse1(Ds *ds, FixParser *p, Fixity op1, FNode *e1)
-{
-    for (;;) {
-        const FTok *t;
-        Fixity op2;
-        FNode *r;
-        FNode *bin;
-        if (p->pos >= p->n) {
-            return e1;
-        }
-        t = &p->toks[p->pos];
-        op2 = t->fix;
-        if (op1.prec == op2.prec && (op1.assoc != op2.assoc || op1.assoc == ASSOC_NONE)) {
-            fail_at(ds, str_printf("cannot mix operators of the same precedence: %s",
-                                   t->op->name));
-        }
-        if (op1.prec > op2.prec || (op1.prec == op2.prec && op1.assoc == ASSOC_LEFT)) {
-            return e1;
-        }
-        p->pos++;
-        r = fix_parse(ds, p, op2);
-        bin = fnode(FN_BIN);
-        bin->op = t->op;
-        bin->l = e1;
-        bin->r = r;
-        e1 = bin;
-    }
-}
-
-static FNode *fix_parse(Ds *ds, FixParser *p, Fixity op1)
-{
-    const FTok *t = &p->toks[p->pos];
-    FNode *e1;
-    if (t->kind == FT_NEG) {
-        Fixity neg;
-        FNode *n;
-        if (op1.prec >= 6) {
-            fail_at(ds, xstrdup("cannot mix prefix negation with an operator of "
-                                "precedence 6 or more"));
-        }
-        p->pos++;
-        neg.prec = 6;
-        neg.assoc = ASSOC_LEFT;
-        n = fnode(FN_NEG);
-        n->l = fix_parse(ds, p, neg);
-        return fix_parse1(ds, p, op1, n);
-    }
-    p->pos++;
-    e1 = fnode(FN_LEAF);
-    e1->leaf = t->exp;
-    return fix_parse1(ds, p, op1, e1);
-}
-
-static FNode *resolve_fixity(Ds *ds, FTok *toks, size_t n)
-{
-    FixParser p;
-    Fixity start;
-    p.toks = toks;
-    p.n = n;
-    p.pos = 0;
-    start.prec = -1;
-    start.assoc = ASSOC_NONE;
-    return fix_parse(ds, &p, start);
-}
-
-static void push_tok(Vec *toks, FTokKind kind, const void *exp, const QName *op, Fixity fix)
-{
-    FTok *t = (FTok *)xcalloc(1, sizeof *t);
-    t->kind = kind;
-    t->exp = exp;
-    t->op = op;
-    t->fix = fix;
-    vec_push(toks, t);
-}
-
-static FTok *tok_array(const Vec *toks)
-{
-    FTok *a = (FTok *)xmalloc(toks->len * sizeof *a);
-    size_t i;
-    for (i = 0; i < toks->len; i++) {
-        a[i] = *(const FTok *)toks->items[i];
-    }
-    return a;
 }
 
 /* --- Patterns ----------------------------------------------------------- */
@@ -701,19 +661,52 @@ static int con_pattern(Ds *ds, const Pat *p, ConInfo **con, Vec *subs)
         Vec toks;
         FNode *tree;
         vec_init(&toks);
-        push_tok(&toks, FT_EXP, p->a, NULL, default_fixity());
+        ftok_push(&toks, FT_EXP, p->a, NULL, fixity_default());
         for (i = 0; i < p->steps.len; i++) {
             const InfixStep *step = (const InfixStep *)p->steps.items[i];
-            push_tok(&toks, FT_OP, NULL, &step->op, op_fixity(ds, &step->op));
-            push_tok(&toks, FT_EXP, step->operand, NULL, default_fixity());
+            ftok_push(&toks, FT_OP, NULL, &step->op, op_fixity(ds, &step->op));
+            ftok_push(&toks, FT_EXP, step->operand, NULL, fixity_default());
         }
-        tree = resolve_fixity(ds, tok_array(&toks), toks.len);
+        tree = resolve_fixity(ds, &toks);
         return con_pattern(ds, fnode_to_pat(ds, tree), con, subs);
+    }
+    case PAT_RECORD: {
+        /* The fields by position: a missing field is a wildcard. */
+        size_t nfields;
+        *con = con_by_qname(ds, &p->con);
+        nfields = (size_t)((*con)->arity - (*con)->ndicts);
+        for (i = 0; i < nfields; i++) {
+            const char *fname = i < (*con)->field_names.len
+                                    ? (const char *)(*con)->field_names.items[i]
+                                    : NULL;
+            Pat *sub = NULL;
+            size_t j;
+            for (j = 0; j < p->fields.len && fname != NULL; j++) {
+                const FieldPat *f = (const FieldPat *)p->fields.items[j];
+                if (str_eq(bare(f->name.name), fname)) {
+                    if (f->pat != NULL) {
+                        sub = f->pat;
+                    } else {
+                        sub = pat_new(PAT_VAR);
+                        sub->var.name = (char *)fname;
+                    }
+                }
+            }
+            if (sub == NULL && p->wildcard && fname != NULL) {
+                sub = pat_new(PAT_VAR);
+                sub->var.name = (char *)fname;
+            }
+            if (sub == NULL) {
+                sub = pat_new(PAT_WILDCARD);
+            }
+            vec_push(subs, sub);
+        }
+        break;
     }
     default:
         return 0;
     }
-    if ((*con)->arity != (int)subs->len) {
+    if ((*con)->arity - (*con)->ndicts != (int)subs->len) {
         fail_at(ds, str_printf("the constructor %s takes %d arguments, but the pattern "
                                "has %lu",
                                (*con)->name, (*con)->arity, (unsigned long)subs->len));
@@ -742,6 +735,8 @@ static Pat *fnode_to_pat(Ds *ds, FNode *n)
 /* --- Match ---------------------------------------------------------------- */
 
 typedef Core *(*Cont)(Ds *ds, void *ctx);
+
+static Core *ds_expr(Ds *ds, const Expr *x);
 
 static Core *match(Ds *ds, Pat **pats, VarRef *vars, size_t n, Cont cont, void *ctx, Fail fail);
 
@@ -871,6 +866,41 @@ static Core *match(Ds *ds, Pat **pats, VarRef *vars, size_t n, Cont cont, void *
     case PAT_LIT: {
         Vec alts;
         CoreAlt *alt;
+        const TcNote *note = p->note;
+        if (note != NULL && note->evs.len == 2
+            && (p->lit.kind != LIT_INTEGER || !tc_ev_is_int((TcEv *)note->evs.items[1]))) {
+            /* An overloaded literal: compare with (==). */
+            Core *lit;
+            Core *cond;
+            CoreAlt *yes;
+            if (p->lit.kind == LIT_INTEGER) {
+                long value = parse_integer(ds, p->lit.raw);
+                lit = core_app2(known_global(ds, "GHC.Num", "fromInteger"),
+                                ev_code(ds, (TcEv *)note->evs.items[1]),
+                                core_int(p->negative ? -value : value));
+            } else if (p->lit.kind == LIT_STRING) {
+                lit = core_app2(known_global(ds, "Data.String", "fromString"),
+                                ev_code(ds, (TcEv *)note->evs.items[1]),
+                                core_str(p->lit.value, p->lit.value_len));
+            } else {
+                unsupported_here(ds, "a floating point literal pattern");
+                return NULL;
+            }
+            {
+                Vec args;
+                vec_init(&args);
+                vec_push(&args, ev_code(ds, (TcEv *)note->evs.items[0]));
+                vec_push(&args, var_code(ds, v));
+                vec_push(&args, lit);
+                cond = core_app(known_global(ds, "GHC.Classes", "=="), &args);
+            }
+            vec_init(&alts);
+            yes = alt_new(ALT_CON, match(ds, pats + 1, vars + 1, n - 1, cont, ctx, fail));
+            yes->con = ds->out->con_true;
+            vec_push(&alts, yes);
+            vec_push(&alts, alt_new(ALT_DEFAULT, fail_code(ds, fail)));
+            return core_case(cond, &alts);
+        }
         if (p->lit.kind == LIT_STRING) {
             /* A string pattern is a list of character patterns. */
             Pat *list = pat_new(PAT_LIST);
@@ -907,7 +937,8 @@ static Core *match(Ds *ds, Pat **pats, VarRef *vars, size_t n, Cont cont, void *
     case PAT_CON:
     case PAT_TUPLE:
     case PAT_LIST:
-    case PAT_INFIX: {
+    case PAT_INFIX:
+    case PAT_RECORD: {
         ConInfo *con;
         Vec subs;
         Pat **np;
@@ -930,11 +961,23 @@ static Core *match(Ds *ds, Pat **pats, VarRef *vars, size_t n, Cont cont, void *
         alt = alt_new(ALT_CON, NULL);
         alt->con = con;
         if (con->arity > 0) {
+            size_t nd = (size_t)con->ndicts;
             mark = ds->nlocals;
             push_frame(ds);
+            if (nd > 0) {
+                if (p->note == NULL || p->note->dicts.len != nd) {
+                    fail_at(ds, xstrdup("internal error: an existential pattern without "
+                                        "dictionaries"));
+                }
+                for (i = 0; i < nd; i++) {
+                    const char *d = (const char *)p->note->dicts.items[i];
+                    bind(ds, d, var_here(ds, i, d));
+                    vec_push(&alt->names, (void *)d);
+                }
+            }
             for (i = 0; i < subs.len; i++) {
                 const char *name = field_name((const Pat *)subs.items[i]);
-                subvars[i] = var_here(ds, i, name);
+                subvars[i] = var_here(ds, nd + i, name);
                 vec_push(&alt->names, (void *)name);
             }
             splice(pats, vars, n, &subs, subvars, &np, &nv, &m);
@@ -949,12 +992,32 @@ static Core *match(Ds *ds, Pat **pats, VarRef *vars, size_t n, Cont cont, void *
         }
         return core_case(var_code(ds, v), &alts);
     }
-    case PAT_RECORD:
-        unsupported_here(ds, "a record pattern");
-        return NULL;
-    case PAT_VIEW:
-        unsupported_here(ds, "a view pattern");
-        return NULL;
+    case PAT_VIEW: {
+        /* `(f -> p)`: match p on `f v`. */
+        Vec binds;
+        Core *let;
+        Core *body;
+        VarRef w;
+        mark = ds->nlocals;
+        vec_init(&binds);
+        push_frame(ds);
+        vec_push(&binds, core_app1(ds_expr(ds, p->expr), var_code(ds, v)));
+        w = var_here(ds, 0, "view");
+        pats[0] = p->a;
+        {
+            VarRef *nv = (VarRef *)xmalloc((n + 1) * sizeof *nv);
+            size_t i;
+            for (i = 0; i < n; i++) {
+                nv[i] = vars[i];
+            }
+            nv[0] = w;
+            body = match(ds, pats, nv, n, cont, ctx, fail);
+        }
+        pop_frame(ds, mark);
+        let = core_let(&binds, body);
+        vec_push(&let->names, xstrdup("view"));
+        return let;
+    }
     default:
         unsupported_here(ds, "this pattern");
         return NULL;
@@ -1078,7 +1141,38 @@ static Core *ds_clause(Ds *ds, const Decl *d, VarRef *vars, Fail fail)
 }
 
 /* The clauses of one function as a lambda. */
+static Core *ds_clauses_body(Ds *ds, const BindGroup *g);
+
+/* The clauses of one function, inside the lambda of its dictionary
+ * parameters. */
 static Core *ds_clauses(Ds *ds, const BindGroup *g)
+{
+    const Decl *first = (const Decl *)g->clauses.items[0];
+    const TcNote *note = first->note;
+    size_t mark = ds->nlocals;
+    size_t n;
+    size_t i;
+    Core *body;
+    Core *lam;
+    if (note == NULL || note->dicts.len == 0) {
+        return ds_clauses_body(ds, g);
+    }
+    n = note->dicts.len;
+    push_frame(ds);
+    for (i = 0; i < n; i++) {
+        const char *d = (const char *)note->dicts.items[i];
+        bind(ds, d, var_here(ds, i, d));
+    }
+    body = ds_clauses_body(ds, g);
+    pop_frame(ds, mark);
+    lam = core_lam((unsigned long)n, body);
+    for (i = 0; i < n; i++) {
+        vec_push(&lam->names, note->dicts.items[i]);
+    }
+    return lam;
+}
+
+static Core *ds_clauses_body(Ds *ds, const BindGroup *g)
 {
     const Decl *first = (const Decl *)g->clauses.items[0];
     size_t arity = clause_args(first).len;
@@ -1361,13 +1455,20 @@ static Core *op_apply(Ds *ds, const QName *op, Core *l, Core *r)
     return core_app2(qname_code(ds, op), l, r);
 }
 
-static Core *negate_code(Ds *ds, Core *e)
+/* Negation. neg is the EXPR_NEG expression, whose note has the Num
+ * dictionary. */
+static Core *negate_code(Ds *ds, const Expr *neg, Core *e)
 {
-    if (e->kind == CORE_INT) {
+    const TcNote *note = neg->note;
+    if (note == NULL || note->evs.len == 0) {
+        fail_at(ds, xstrdup("internal error: a negation without a Num dictionary"));
+    }
+    if (e->kind == CORE_INT && tc_ev_is_int((TcEv *)note->evs.items[0])) {
         e->ival = -e->ival;
         return e;
     }
-    return core_app1(known_global(ds, "GHC.Num", "negate"), e);
+    return core_app2(known_global(ds, "GHC.Num", "negate"),
+                     ev_code(ds, (TcEv *)note->evs.items[0]), e);
 }
 
 static Core *fnode_code(Ds *ds, const FNode *n)
@@ -1376,7 +1477,7 @@ static Core *fnode_code(Ds *ds, const FNode *n)
     case FN_LEAF:
         return ds_expr(ds, (const Expr *)n->leaf);
     case FN_NEG:
-        return negate_code(ds, fnode_code(ds, n->l));
+        return negate_code(ds, (const Expr *)n->leaf, fnode_code(ds, n->l));
     default:
         return op_apply(ds, n->op, fnode_code(ds, n->l), fnode_code(ds, n->r));
     }
@@ -1387,10 +1488,10 @@ static void push_operand(Ds *ds, Vec *toks, const Expr *e)
 {
     (void)ds;
     if (e->kind == EXPR_NEG) {
-        push_tok(toks, FT_NEG, NULL, NULL, default_fixity());
+        ftok_push(toks, FT_NEG, e, NULL, fixity_default());
         e = e->a;
     }
-    push_tok(toks, FT_EXP, e, NULL, default_fixity());
+    ftok_push(toks, FT_EXP, e, NULL, fixity_default());
 }
 
 static Core *ds_infix(Ds *ds, const Expr *x)
@@ -1401,15 +1502,16 @@ static Core *ds_infix(Ds *ds, const Expr *x)
     push_operand(ds, &toks, x->a);
     for (i = 0; i < x->steps.len; i++) {
         const InfixStep *step = (const InfixStep *)x->steps.items[i];
-        push_tok(&toks, FT_OP, NULL, &step->op, op_fixity(ds, &step->op));
+        ftok_push(&toks, FT_OP, NULL, &step->op, op_fixity(ds, &step->op));
         push_operand(ds, &toks, (const Expr *)step->operand);
     }
-    return fnode_code(ds, resolve_fixity(ds, tok_array(&toks), toks.len));
+    return fnode_code(ds, resolve_fixity(ds, &toks));
 }
 
 static const Expr *strip(const Expr *e)
 {
-    while (e->kind == EXPR_PAREN || e->kind == EXPR_SIG || e->kind == EXPR_TYPE_APP) {
+    while ((e->kind == EXPR_PAREN && (e->note == NULL || e->note->lams.len == 0))
+           || e->kind == EXPR_TYPE_APP) {
         e = e->a;
     }
     return e;
@@ -1429,10 +1531,15 @@ static Core *ds_app(Ds *ds, const Expr *x)
     }
     if (head->kind == EXPR_CON) {
         ConInfo *con = con_by_qname(ds, &head->name);
+        const TcNote *note = head->name.note;
+        size_t nevs = note != NULL ? note->evs.len : 0;
         if (con->type->newtype && args.len == 1) {
             return ds_expr(ds, (const Expr *)args.items[0]);
         }
-        if (!con->type->newtype && (size_t)con->arity == args.len) {
+        if (!con->type->newtype && (size_t)con->arity == args.len + nevs) {
+            for (i = 0; i < nevs; i++) {
+                vec_push(&codes, ev_code(ds, (TcEv *)note->evs.items[i]));
+            }
             for (i = 0; i < args.len; i++) {
                 vec_push(&codes, ds_expr(ds, (const Expr *)args.items[i]));
             }
@@ -1554,19 +1661,20 @@ static Core *ds_case(Ds *ds, const Expr *x)
 typedef struct {
     const Vec *stmts;
     size_t i;
+    const TcNote *note;
 } StmtCtx;
 
-static Core *ds_do(Ds *ds, const Vec *stmts, size_t i);
+static Core *ds_do(Ds *ds, const Vec *stmts, size_t i, const TcNote *note);
 
 static Core *do_cont(Ds *ds, void *ctx)
 {
     StmtCtx *c = (StmtCtx *)ctx;
-    return ds_do(ds, c->stmts, c->i);
+    return ds_do(ds, c->stmts, c->i, c->note);
 }
 
-/* A `do` block from statement i on. The block is an IO action: `>>=` and
- * `>>` come from GHC.Base. */
-static Core *ds_do(Ds *ds, const Vec *stmts, size_t i)
+/* A `do` block from statement i on. `>>=` and `>>` come from GHC.Base,
+ * with the Monad dictionary of the note. */
+static Core *ds_do(Ds *ds, const Vec *stmts, size_t i, const TcNote *note)
 {
     const Stmt *stmt = (const Stmt *)stmts->items[i];
     if (i + 1 == stmts->len) {
@@ -1577,8 +1685,8 @@ static Core *ds_do(Ds *ds, const Vec *stmts, size_t i)
     }
     switch (stmt->kind) {
     case STMT_EXPR:
-        return core_app2(known_global(ds, "GHC.Base", ">>"), ds_expr(ds, stmt->expr),
-                         ds_do(ds, stmts, i + 1));
+        return core_app2(apply_evs(ds, known_global(ds, "GHC.Base", ">>"), note),
+                         ds_expr(ds, stmt->expr), ds_do(ds, stmts, i + 1, note));
     case STMT_BIND: {
         Core *action = ds_expr(ds, stmt->expr);
         size_t mark = ds->nlocals;
@@ -1591,18 +1699,19 @@ static Core *ds_do(Ds *ds, const Vec *stmts, size_t i)
         v = var_here(ds, 0, field_name(stmt->pat));
         ctx.stmts = stmts;
         ctx.i = i + 1;
+        ctx.note = note;
         body = match(ds, &one, &v, 1, do_cont, &ctx, fail_error("do: pattern match failure"));
         pop_frame(ds, mark);
         lam = core_lam(1, body);
         vec_push(&lam->names, (void *)v.name);
-        return core_app2(known_global(ds, "GHC.Base", ">>="), action, lam);
+        return core_app2(apply_evs(ds, known_global(ds, "GHC.Base", ">>="), note), action, lam);
     }
     default: {
         Vec binds;
         Vec names;
         size_t mark;
         int pushed = begin_decls(ds, &stmt->decls, &binds, &names, &mark);
-        Core *body = ds_do(ds, stmts, i + 1);
+        Core *body = ds_do(ds, stmts, i + 1, note);
         return finish_decls(ds, pushed, &binds, &names, body, mark);
     }
     }
@@ -1680,26 +1789,196 @@ static Core *ds_comp(Ds *ds, const Expr *body, const Vec *stmts, size_t i)
     }
 }
 
+static Core *ds_expr_inner(Ds *ds, const Expr *x);
+
+static int field_index(const ConInfo *con, const char *field)
+{
+    size_t i;
+    for (i = 0; i < con->field_names.len; i++) {
+        if (str_eq((const char *)con->field_names.items[i], field)) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static Core *field_value(Ds *ds, const FieldUpdate *f)
+{
+    if (f->value != NULL) {
+        return ds_expr(ds, f->value);
+    }
+    {
+        QName q = f->name;
+        q.qual = "";
+        return qname_code(ds, &q);
+    }
+}
+
+/* `C { f = e }`: the fields by position. */
+static Core *ds_record_con(Ds *ds, const Expr *x)
+{
+    ConInfo *con = con_by_qname(ds, &x->name);
+    size_t nfields = (size_t)(con->arity - con->ndicts);
+    Vec codes;
+    size_t i;
+    size_t j;
+    if (x->wildcard) {
+        unsupported_here(ds, "a record wildcard in an expression");
+    }
+    if (con->ndicts > 0) {
+        unsupported_here(ds, "record construction of an existential constructor");
+    }
+    vec_init(&codes);
+    for (i = 0; i < nfields; i++) {
+        Core *code = NULL;
+        for (j = 0; j < x->fields.len; j++) {
+            const FieldUpdate *f = (const FieldUpdate *)x->fields.items[j];
+            if (field_index(con, bare(f->name.name)) == (int)i) {
+                code = field_value(ds, f);
+            }
+        }
+        if (code == NULL) {
+            code = fail_code(ds, fail_error(str_printf("Missing field in record construction %s",
+                                                       i < con->field_names.len
+                                                           ? (const char *)con->field_names.items[i]
+                                                           : "")));
+        }
+        vec_push(&codes, code);
+    }
+    if (con->type->newtype) {
+        return (Core *)codes.items[0];
+    }
+    return core_con(con, &codes);
+}
+
+/* `e { f = v }`: a case on the constructors that have the fields. */
+static Core *ds_record_update(Ds *ds, const Expr *x)
+{
+    const FieldUpdate *first = (const FieldUpdate *)x->fields.items[0];
+    const Entity *e = lookup_entity(ds, first->name.qual, bare(first->name.name));
+    TypeInfo *type = NULL;
+    size_t k = x->fields.len;
+    size_t mark = ds->nlocals;
+    Vec binds;
+    Vec alts;
+    size_t i;
+    size_t j;
+    Core *let;
+    if (e == NULL) {
+        fail_at(ds, str_printf("unbound field %s", first->name.name));
+    }
+    for (i = 0; i < ds->out->types.len && type == NULL; i++) {
+        TypeInfo *t = (TypeInfo *)ds->out->types.items[i];
+        if (!str_eq(t->module, e->module)) {
+            continue;
+        }
+        for (j = 0; j < t->cons.len; j++) {
+            if (field_index((const ConInfo *)t->cons.items[j], e->name) >= 0) {
+                type = t;
+            }
+        }
+    }
+    if (type == NULL) {
+        fail_at(ds, str_printf("no constructor has the field %s", first->name.name));
+    }
+    if (type->newtype) {
+        return field_value(ds, first);
+    }
+    vec_init(&binds);
+    push_frame(ds);
+    for (i = 0; i < k; i++) {
+        vec_push(&binds, field_value(ds, (const FieldUpdate *)x->fields.items[i]));
+    }
+    vec_push(&binds, ds_expr(ds, x->a));
+    vec_init(&alts);
+    for (i = 0; i < type->cons.len; i++) {
+        ConInfo *con = (ConInfo *)type->cons.items[i];
+        int ok = 1;
+        CoreAlt *alt;
+        Vec args;
+        for (j = 0; j < k && ok; j++) {
+            const FieldUpdate *f = (const FieldUpdate *)x->fields.items[j];
+            ok = field_index(con, bare(f->name.name)) >= 0;
+        }
+        if (!ok || con->ndicts > 0) {
+            continue;
+        }
+        vec_init(&args);
+        for (j = 0; j < (size_t)con->arity; j++) {
+            Core *arg = core_var(0, (unsigned long)j, "f");
+            size_t u;
+            for (u = 0; u < k; u++) {
+                const FieldUpdate *f = (const FieldUpdate *)x->fields.items[u];
+                if (field_index(con, bare(f->name.name)) == (int)j) {
+                    arg = core_var(1, (unsigned long)u, "u");
+                }
+            }
+            vec_push(&args, arg);
+        }
+        alt = alt_new(ALT_CON, core_con(con, &args));
+        alt->con = con;
+        for (j = 0; j < (size_t)con->arity; j++) {
+            vec_push(&alt->names, (void *)"f");
+        }
+        vec_push(&alts, alt);
+    }
+    vec_push(&alts, alt_new(ALT_DEFAULT, fail_code(ds, fail_error("No match in record update"))));
+    let = core_let(&binds, core_case(core_var(0, (unsigned long)k, "r"), &alts));
+    pop_frame(ds, mark);
+    for (i = 0; i < k; i++) {
+        vec_push(&let->names, (void *)"u");
+    }
+    vec_push(&let->names, (void *)"r");
+    return let;
+}
+
+/* An expression, inside the dictionary lambda of its note. */
 static Core *ds_expr(Ds *ds, const Expr *x)
+{
+    size_t mark = ds->nlocals;
+    size_t i;
+    size_t n;
+    Core *body;
+    Core *lam;
+    if (x->note == NULL || x->note->lams.len == 0) {
+        return ds_expr_inner(ds, x);
+    }
+    n = x->note->lams.len;
+    push_frame(ds);
+    for (i = 0; i < n; i++) {
+        const char *d = (const char *)x->note->lams.items[i];
+        bind(ds, d, var_here(ds, i, d));
+    }
+    body = ds_expr_inner(ds, x);
+    pop_frame(ds, mark);
+    lam = core_lam((unsigned long)n, body);
+    for (i = 0; i < n; i++) {
+        vec_push(&lam->names, x->note->lams.items[i]);
+    }
+    return lam;
+}
+
+static Core *ds_expr_inner(Ds *ds, const Expr *x)
 {
     size_t i;
     switch (x->kind) {
     case EXPR_VAR:
         return qname_code(ds, &x->name);
     case EXPR_CON:
-        return con_value(ds, con_by_qname(ds, &x->name));
+        return apply_evs(ds, con_value(ds, con_by_qname(ds, &x->name)), x->name.note);
     case EXPR_LIT:
-        return literal_code(ds, &x->lit);
+        return literal_code(ds, &x->lit, x->note);
     case EXPR_APP:
-        return ds_app(ds, x);
-    case EXPR_PAREN:
+        return apply_evs(ds, ds_app(ds, x), x->note);
     case EXPR_SIG:
+        return apply_evs(ds, ds_expr(ds, x->a), x->note);
+    case EXPR_PAREN:
     case EXPR_TYPE_APP:
         return ds_expr(ds, x->a);
     case EXPR_INFIX:
         return ds_infix(ds, x);
     case EXPR_NEG:
-        return negate_code(ds, ds_expr(ds, x->a));
+        return negate_code(ds, x, ds_expr(ds, x->a));
     case EXPR_LAMBDA:
         return ds_lambda(ds, x);
     case EXPR_LAMBDA_CASE: {
@@ -1734,11 +2013,13 @@ static Core *ds_expr(Ds *ds, const Expr *x)
     }
     case EXPR_CASE:
         return ds_case(ds, x);
+    case EXPR_MULTI_IF:
+        return ds_guard_alts(ds, &x->guards, fail_error("multi-way if: no alternative matched"));
     case EXPR_DO:
         if (x->stmts.len == 0) {
             fail_at(ds, xstrdup("an empty do block"));
         }
-        return ds_do(ds, &x->stmts, 0);
+        return ds_do(ds, &x->stmts, 0, x->note);
     case EXPR_TUPLE: {
         Vec items;
         vec_init(&items);
@@ -1790,7 +2071,7 @@ static Core *ds_expr(Ds *ds, const Expr *x)
         }
         name = x->b != NULL ? (x->c != NULL ? "enumFromThenTo" : "enumFromThen")
                             : (x->c != NULL ? "enumFromTo" : "enumFrom");
-        return core_app(known_global(ds, "GHC.Enum", name), &args);
+        return core_app(apply_evs(ds, known_global(ds, "GHC.Enum", name), x->note), &args);
     }
     case EXPR_LIST_COMP:
         return ds_comp(ds, x->a, &x->stmts, 0);
@@ -1815,9 +2096,9 @@ static Core *ds_expr(Ds *ds, const Expr *x)
         return lam;
     }
     case EXPR_RECORD_CON:
+        return ds_record_con(ds, x);
     case EXPR_RECORD_UPDATE:
-        unsupported_here(ds, "record syntax");
-        return NULL;
+        return ds_record_update(ds, x);
     case EXPR_HOLE:
         fail_at(ds, xstrdup("a hole `_` in an expression"));
         return NULL;
@@ -1860,14 +2141,49 @@ static const char *con_decl_name(const ConDecl *c, int *arity)
     }
 }
 
-/* The first pass over a module: types, constructors, fixities and
- * primitives. */
+/* The number of class predicates in a constructor context. */
+static int ctx_size(const Type *ctx)
+{
+    while (ctx != NULL && ctx->kind == TY_PAREN) {
+        ctx = ctx->a;
+    }
+    if (ctx == NULL) {
+        return 0;
+    }
+    if (ctx->kind == TY_TUPLE) {
+        return (int)ctx->items.len;
+    }
+    if (ctx->kind == TY_CON && str_eq(ctx->con.name, "()")) {
+        return 0;
+    }
+    return 1;
+}
+
+static ConInfo *dict_con(Ds *ds, const TcClass *cls)
+{
+    ConInfo *con = (ConInfo *)strmap_get(&ds->dict_cons, key(cls->module, cls->name));
+    if (con == NULL) {
+        fail_at(ds, str_printf("the class %s.%s has no dictionary", cls->module, cls->name));
+    }
+    return con;
+}
+
+static char *super_name(const TcClass *cls, size_t i)
+{
+    return str_printf("%s{super%lu}", cls->name, (unsigned long)i);
+}
+
+/* The first pass over a module: types, constructors, fixities,
+ * primitives and class dictionaries. */
 static void declare_module(Ds *ds, const ModSrc *src)
 {
     const Module *m = src->module;
+    const TcModuleInfo *info = ds->tc != NULL ? tc_info(ds->tc, src->name) : NULL;
     size_t i;
     size_t j;
+    size_t k;
     set_module(ds, src);
+    fixity_collect(&ds->fixities, src->name, m);
     for (i = 0; i < m->decls.len; i++) {
         const Decl *d = (const Decl *)m->decls.items[i];
         ds->pos = d->pos;
@@ -1878,18 +2194,22 @@ static void declare_module(Ds *ds, const ModSrc *src)
                 const ConDecl *c = (const ConDecl *)d->cons.items[j];
                 int arity;
                 const char *name = con_decl_name(c, &arity);
-                ConInfo *con = con_new(t, name, arity);
+                int nd = ctx_size(c->ctx);
+                ConInfo *con = con_new(t, name, arity + nd);
+                con->ndicts = nd;
+                if (nd > 0 && d->newtype) {
+                    unsupported_here(ds, "a newtype with a context");
+                }
+                if (c->kind == CON_RECORD) {
+                    for (k = 0; k < c->fields.len; k++) {
+                        const Field *f = (const Field *)c->fields.items[k];
+                        size_t n;
+                        for (n = 0; n < f->names.len; n++) {
+                            vec_push(&con->field_names, ((const Ident *)f->names.items[n])->name);
+                        }
+                    }
+                }
                 strmap_put(&ds->cons, key(src->name, name), con);
-            }
-            break;
-        }
-        case DECL_FIXITY: {
-            Fixity *f = (Fixity *)xmalloc(sizeof *f);
-            f->assoc = d->assoc;
-            f->prec = d->prec != NULL ? atoi(d->prec) : 9;
-            for (j = 0; j < d->strs.len; j++) {
-                strmap_put(&ds->fixities, key(src->name, bare((const char *)d->strs.items[j])),
-                           f);
             }
             break;
         }
@@ -1905,12 +2225,6 @@ static void declare_module(Ds *ds, const ModSrc *src)
             }
             break;
         }
-        case DECL_CLASS:
-            unsupported_here(ds, "a class declaration");
-            break;
-        case DECL_INSTANCE:
-            unsupported_here(ds, "an instance declaration");
-            break;
         case DECL_PAT_SYN:
         case DECL_PAT_SYN_SIG:
             unsupported_here(ds, "a pattern synonym");
@@ -1919,12 +2233,143 @@ static void declare_module(Ds *ds, const ModSrc *src)
             break;
         }
     }
+    if (info == NULL) {
+        return;
+    }
+    for (i = 0; i < info->classes.len; i++) {
+        const TcClass *cls = (const TcClass *)info->classes.items[i];
+        TypeInfo *t = type_new_info(ds, src->name, str_printf("%s{dict}", cls->name), 0);
+        ConInfo *con = con_new(t, str_printf("%s{Dict}", cls->name),
+                               (int)(cls->supers.len + cls->methods.len));
+        strmap_put(&ds->dict_cons, key(cls->module, cls->name), con);
+    }
 }
 
-/* The second pass: the bindings. */
+static Core *ds_clauses(Ds *ds, const BindGroup *g);
+static Core *ev_code(Ds *ds, TcEv *ev);
+
+/* `\d -> case d of Dict f1 .. fn -> fi`. */
+static Core *field_selector(ConInfo *con, size_t index, const char *name)
+{
+    Vec alts;
+    CoreAlt *alt;
+    Core *lam;
+    size_t i;
+    vec_init(&alts);
+    alt = alt_new(ALT_CON, core_var(0, (unsigned long)index, name));
+    alt->con = con;
+    for (i = 0; i < (size_t)con->arity; i++) {
+        vec_push(&alt->names, i == index ? (void *)name : (void *)"_");
+    }
+    vec_push(&alts, alt);
+    lam = core_lam(1, core_case(core_var(0, 0, "d"), &alts));
+    vec_push(&lam->names, xstrdup("d"));
+    return lam;
+}
+
+static BindGroup *group_of(const char *name, Vec *clauses)
+{
+    BindGroup *g = (BindGroup *)xcalloc(1, sizeof *g);
+    g->name = name;
+    g->clauses = *clauses;
+    return g;
+}
+
+/* The dictionary function of an instance:
+ * `\ctx1 .. ctxn -> Dict super1 .. method1 ..`. */
+static Core *instance_code(Ds *ds, const TcInst *inst)
+{
+    const TcClass *cls = inst->cls;
+    ConInfo *con = dict_con(ds, cls);
+    size_t n = inst->ctx_dicts.len;
+    size_t mark = ds->nlocals;
+    Vec fields;
+    size_t i;
+    Core *body;
+    Core *lam;
+    if (n > 0) {
+        push_frame(ds);
+        for (i = 0; i < n; i++) {
+            const char *d = (const char *)inst->ctx_dicts.items[i];
+            bind(ds, d, var_here(ds, i, d));
+        }
+    }
+    vec_init(&fields);
+    for (i = 0; i < inst->supers.len; i++) {
+        TcEv *ev = (TcEv *)inst->supers.items[i];
+        vec_push(&fields, ev == NULL ? core_con(tuple_con(ds, 0), &fields) : ev_code(ds, ev));
+    }
+    for (i = 0; i < inst->methods.len; i++) {
+        Vec *clauses = (Vec *)inst->methods.items[i];
+        const TcMethod *m = (const TcMethod *)cls->methods.items[i];
+        if (clauses == NULL) {
+            const char *msg = str_printf("No instance nor default method for class operation %s",
+                                         m->name);
+            vec_push(&fields, fail_code(ds, fail_error(msg)));
+        } else {
+            vec_push(&fields, ds_clauses(ds, group_of(m->name, clauses)));
+        }
+    }
+    body = core_con(con, &fields);
+    if (n == 0) {
+        return body;
+    }
+    pop_frame(ds, mark);
+    lam = core_lam((unsigned long)n, body);
+    for (i = 0; i < n; i++) {
+        vec_push(&lam->names, inst->ctx_dicts.items[i]);
+    }
+    return lam;
+}
+
+/* A record field selector. */
+static Core *selector_code(Ds *ds, const ModSrc *src, const TcSelector *sel)
+{
+    Vec alts;
+    size_t i;
+    Core *lam;
+    vec_init(&alts);
+    for (i = 0; i < sel->cons.len; i++) {
+        ConInfo *con = (ConInfo *)strmap_get(&ds->cons,
+                                             key(src->name, (const char *)sel->cons.items[i]));
+        size_t index = (size_t)sel->indexes.items[i];
+        CoreAlt *alt;
+        size_t j;
+        if (con == NULL) {
+            fail_at(ds, str_printf("no constructor %s", (const char *)sel->cons.items[i]));
+        }
+        if (con->type->newtype) {
+            lam = core_lam(1, core_var(0, 0, "r"));
+            vec_push(&lam->names, xstrdup("r"));
+            return lam;
+        }
+        alt = alt_new(ALT_CON, core_var(0, (unsigned long)(index + (size_t)con->ndicts), sel->name));
+        alt->con = con;
+        for (j = 0; j < (size_t)con->arity; j++) {
+            vec_push(&alt->names, j == index ? (void *)sel->name : (void *)"_");
+        }
+        vec_push(&alts, alt);
+    }
+    {
+        ConInfo *first = (ConInfo *)strmap_get(&ds->cons,
+                                               key(src->name, (const char *)sel->cons.items[0]));
+        if (first->type->cons.len > sel->cons.len) {
+            vec_push(&alts, alt_new(ALT_DEFAULT,
+                                    fail_code(ds, fail_error(str_printf(
+                                                      "No match in record selector %s",
+                                                      sel->name)))));
+        }
+    }
+    lam = core_lam(1, core_case(core_var(0, 0, "r"), &alts));
+    vec_push(&lam->names, xstrdup("r"));
+    return lam;
+}
+
+/* The second pass: the bindings, classes, instances and selectors. */
 static void define_module(Ds *ds, const ModSrc *src)
 {
     const Module *m = src->module;
+    const TcModuleInfo *info = ds->tc != NULL ? tc_info(ds->tc, src->name) : NULL;
     Vec groups;
     size_t i;
     size_t j;
@@ -1959,6 +2404,40 @@ static void define_module(Ds *ds, const ModSrc *src)
                 vec_push(&global->body->names, xstrdup("pat"));
             }
         }
+    }
+    if (info == NULL) {
+        return;
+    }
+    for (i = 0; i < info->classes.len; i++) {
+        const TcClass *cls = (const TcClass *)info->classes.items[i];
+        ConInfo *con = dict_con(ds, cls);
+        for (j = 0; j < cls->supers.len; j++) {
+            Global *g = global_of(ds, src->name, super_name(cls, j));
+            g->body = field_selector(con, j, "super");
+        }
+        for (j = 0; j < cls->methods.len; j++) {
+            const TcMethod *meth = (const TcMethod *)cls->methods.items[j];
+            Global *g = global_of(ds, src->name, meth->name);
+            g->body = field_selector(con, cls->supers.len + j, meth->name);
+            if (meth->deflt != NULL) {
+                Global *dm = global_of(ds, src->name, tc_default_name(meth->name));
+                ds->pos = ((const Decl *)meth->deflt->items[0])->pos;
+                dm->body = ds_clauses(ds, group_of(meth->name, meth->deflt));
+            }
+        }
+    }
+    for (i = 0; i < info->instances.len; i++) {
+        const TcInst *inst = (const TcInst *)info->instances.items[i];
+        Global *g = global_of(ds, src->name, inst->name);
+        if (inst->decl != NULL) {
+            ds->pos = inst->decl->pos;
+        }
+        g->body = instance_code(ds, inst);
+    }
+    for (i = 0; i < info->selectors.len; i++) {
+        const TcSelector *sel = (const TcSelector *)info->selectors.items[i];
+        Global *g = global_of(ds, src->name, sel->name);
+        g->body = selector_code(ds, src, sel);
     }
 }
 
@@ -2000,7 +2479,7 @@ static Vec reach(Ds *ds, ModSrc *main)
     return out;
 }
 
-char *desugar_program(const Program *p, const Vec *packages, CoreProgram *out)
+char *desugar_program(const Program *p, const Tc *tc, const Vec *packages, CoreProgram *out)
 {
     Ds ds;
     size_t i;
@@ -2009,6 +2488,8 @@ char *desugar_program(const Program *p, const Vec *packages, CoreProgram *out)
     Vec reached;
     memset(&ds, 0, sizeof ds);
     ds.program = p;
+    ds.tc = tc;
+    strmap_init(&ds.dict_cons);
     strmap_init(&ds.sources);
     strmap_init(&ds.globals);
     strmap_init(&ds.cons);
@@ -2043,6 +2524,17 @@ char *desugar_program(const Program *p, const Vec *packages, CoreProgram *out)
         return ds.error;
     }
     reached = reach(&ds, ds.main);
+    for (i = 0; i < reached.len && tc != NULL; i++) {
+        const ModSrc *src = (const ModSrc *)reached.items[i];
+        Pos pos;
+        const char *err = tc_module_error(tc, src->name, &pos);
+        if (err != NULL) {
+            if (pos.line != 0) {
+                return str_printf("%s:%lu:%lu: %s", src->path, pos.line, pos.col, err);
+            }
+            return str_printf("%s: %s", src->path, err);
+        }
+    }
     for (i = 0; i < reached.len; i++) {
         declare_module(&ds, (const ModSrc *)reached.items[i]);
     }

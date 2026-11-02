@@ -1,8 +1,7 @@
 {-# LANGUAGE GHCForeignImportPrim #-}
 
 -- | Arbitrary-precision integers. The names follow the module
--- GHC.Num.Integer of GHC. The boot base has no classes yet, so these
--- functions are the only way to compute with an Integer.
+-- GHC.Num.Integer of GHC. GHC.Num and GHC.Real give the classes.
 --
 -- The representation is primitive. The evaluator keeps an Integer that
 -- fits in an Int as an Int, so 'integerFromInt' costs nothing.
@@ -38,7 +37,9 @@ module GHC.Num.Integer
   )
 where
 
+import GHC.Classes
 import GHC.Exception.Type
+import GHC.Prim
 import GHC.Types
 
 data Integer
@@ -79,11 +80,12 @@ foreign import prim "integerGt" integerGt :: Integer -> Integer -> Bool
 
 foreign import prim "integerGe" integerGe :: Integer -> Integer -> Bool
 
+-- The module comes before GHC.Num, so it has no integer literals.
 integerZero :: Integer
-integerZero = integerFromInt 0
+integerZero = integerFromInt (primOrd '\NUL')
 
 integerOne :: Integer
-integerOne = integerFromInt 1
+integerOne = integerFromInt (primOrd '\SOH')
 
 integerIsZero :: Integer -> Bool
 integerIsZero x = integerEq x integerZero
@@ -133,3 +135,14 @@ integerCompare x y
   | integerLt x y = LT
   | integerEq x y = EQ
   | True = GT
+
+instance Eq Integer where
+  (==) = integerEq
+  (/=) = integerNe
+
+instance Ord Integer where
+  compare = integerCompare
+  (<) = integerLt
+  (<=) = integerLe
+  (>) = integerGt
+  (>=) = integerGe

@@ -11,14 +11,14 @@ digits s = map digitToInt (filter isDigit s)
 
 rot13 :: Char -> Char
 rot13 c
-  | geChar c 'a' && leChar c 'z' = rotate 'a' c
-  | geChar c 'A' && leChar c 'Z' = rotate 'A' c
+  | c >= 'a' && c <= 'z' = rotate 'a' c
+  | c >= 'A' && c <= 'Z' = rotate 'A' c
   | otherwise = c
   where
     rotate base ch = chr (ord base + (ord ch - ord base + 13) `mod` 26)
 
 count :: Char -> String -> Int
-count c = length . filter (eqChar c)
+count c = length . filter (== c)
 
 main :: IO ()
 main = do
@@ -43,12 +43,12 @@ main = do
   print (length "\955\8364")
   print (ord (head "\955"))
   putStrLn (reverse "stressed")
-  putStrLn (takeWhile (neChar ' ') "first second")
+  putStrLn (takeWhile (/= ' ') "first second")
   print (length (replicate 3 'x' ++ "yz"))
   putStrLn (concatMap (\c -> [c, c]) "ab")
-  print (if ltChar 'a' 'b' && gtChar 'b' 'a' then 1 else 0)
+  print (if 'a' < 'b' && 'b' > 'a' then 1 else 0)
   putStrLn (if "abc" `eqStr` "abc" then "equal" else "different")
   where
     eqStr [] [] = True
-    eqStr (x : xs) (y : ys) = eqChar x y && eqStr xs ys
+    eqStr (x : xs) (y : ys) = x == y && eqStr xs ys
     eqStr _ _ = False

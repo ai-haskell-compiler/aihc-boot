@@ -1,4 +1,3 @@
-{-# LANGUAGE MagicHash #-}
 {-# LANGUAGE BangPatterns #-}
 
 -- |
@@ -18,6 +17,9 @@
 -- preconditions expected by public modules. Use at your own risk!
 --
 -- Basic UTF-8 validation and character manipulation.
+--
+-- Cut down for aihc-boot: the module uses only the lifted API of base.
+-- Upstream uses primitive operations and 'Addr#' tables.
 module Data.Text.Internal.Encoding.Utf8 (
     utf8Length,
     utf8LengthByLeader,
@@ -34,13 +36,17 @@ module Data.Text.Internal.Encoding.Utf8 (
   ) where
 
 import Data.Bits (Bits(..))
-import Data.Char (ord)
-import GHC.Exts
-import GHC.Word (Word8(..))
+import Data.Char (chr, ord)
+import Data.Word (Word8)
+import qualified Data.Text.Array as A
 
 -- | @since 2.0
 utf8Length :: Char -> Int
-utf8Length (C# c) = I# ((1# +# geChar# c (chr# 0x80#)) +# (geChar# c (chr# 0x800#) +# geChar# c (chr# 0x10000#)))
+utf8Length c
+  | c < '\x80' = 1
+  | c < '\x800' = 2
+  | c < '\x10000' = 3
+  | otherwise = 4
 {-# INLINE utf8Length #-}
 
 -- | @since 2.0
@@ -92,37 +98,36 @@ ord4 c =
 {-# INLINE ord4 #-}
 
 chr2 :: Word8 -> Word8 -> Char
-chr2 (W8# x1#) (W8# x2#) = C# (chr# (z1# +# z2#))
+chr2 x1 x2 = chr (z1 + z2)
     where
-      !y1# = word2Int# (word8ToWord# x1#)
-      !y2# = word2Int# (word8ToWord# x2#)
-      !z1# = uncheckedIShiftL# (y1# -# 0xC0#) 6#
-      !z2# = y2# -# 0x80#
+      !y1 = word8ToInt x1
+      !y2 = word8ToInt x2
+      !z1 = (y1 - 0xC0) `shiftL` 6
+      !z2 = y2 - 0x80
 {-# INLINE chr2 #-}
 
 chr3 :: Word8 -> Word8 -> Word8 -> Char
-chr3 (W8# x1#) (W8# x2#) (W8# x3#) = C# (chr# (z1# +# z2# +# z3#))
+chr3 x1 x2 x3 = chr (z1 + z2 + z3)
     where
-      !y1# = word2Int# (word8ToWord# x1#)
-      !y2# = word2Int# (word8ToWord# x2#)
-      !y3# = word2Int# (word8ToWord# x3#)
-      !z1# = uncheckedIShiftL# (y1# -# 0xE0#) 12#
-      !z2# = uncheckedIShiftL# (y2# -# 0x80#) 6#
-      !z3# = y3# -# 0x80#
+      !y1 = word8ToInt x1
+      !y2 = word8ToInt x2
+      !y3 = word8ToInt x3
+      !z1 = (y1 - 0xE0) `shiftL` 12
+      !z2 = (y2 - 0x80) `shiftL` 6
+      !z3 = y3 - 0x80
 {-# INLINE chr3 #-}
 
 chr4 :: Word8 -> Word8 -> Word8 -> Word8 -> Char
-chr4 (W8# x1#) (W8# x2#) (W8# x3#) (W8# x4#) =
-    C# (chr# (z1# +# z2# +# z3# +# z4#))
+chr4 x1 x2 x3 x4 = chr (z1 + z2 + z3 + z4)
     where
-      !y1# = word2Int# (word8ToWord# x1#)
-      !y2# = word2Int# (word8ToWord# x2#)
-      !y3# = word2Int# (word8ToWord# x3#)
-      !y4# = word2Int# (word8ToWord# x4#)
-      !z1# = uncheckedIShiftL# (y1# -# 0xF0#) 18#
-      !z2# = uncheckedIShiftL# (y2# -# 0x80#) 12#
-      !z3# = uncheckedIShiftL# (y3# -# 0x80#) 6#
-      !z4# = y4# -# 0x80#
+      !y1 = word8ToInt x1
+      !y2 = word8ToInt x2
+      !y3 = word8ToInt x3
+      !y4 = word8ToInt x4
+      !z1 = (y1 - 0xF0) `shiftL` 18
+      !z2 = (y2 - 0x80) `shiftL` 12
+      !z3 = (y3 - 0x80) `shiftL` 6
+      !z4 = y4 - 0x80
 {-# INLINE chr4 #-}
 
 intToWord8 :: Int -> Word8
@@ -134,13 +139,22 @@ word8ToInt = fromIntegral
 newtype ByteClass = ByteClass Word8
 
 byteToClass :: Word8 -> ByteClass
-byteToClass n = ByteClass (W8# el#)
-  where
-    !(I# n#) = word8ToInt n
-    el# = indexWord8OffAddr# table# n#
+byteToClass n = ByteClass (A.unsafeIndex byteClassTable (word8ToInt n))
 
-    table# :: Addr#
-    table# = "\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\b\b\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\n\ETX\ETX\ETX\ETX\ETX\ETX\ETX\ETX\ETX\ETX\ETX\ETX\EOT\ETX\ETX\v\ACK\ACK\ACK\ENQ\b\b\b\b\b\b\b\b\b\b\b"#
+-- | The byte classes of the state machine, as an array of bytes.
+byteClassTable :: A.Array
+byteClassTable = tableFromString
+  "\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\NUL\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\SOH\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\a\b\b\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\STX\n\ETX\ETX\ETX\ETX\ETX\ETX\ETX\ETX\ETX\ETX\ETX\ETX\EOT\ETX\ETX\v\ACK\ACK\ACK\ENQ\b\b\b\b\b\b\b\b\b\b\b"
+{-# NOINLINE byteClassTable #-}
+
+-- | An array of the code points of a string, as bytes.
+tableFromString :: String -> A.Array
+tableFromString str = A.run (do
+  arr <- A.new (length str)
+  let fill _ [] = return ()
+      fill i (c : cs) = A.unsafeWrite arr i (intToWord8 (ord c)) >> fill (i + 1) cs
+  fill 0 str
+  return arr)
 
 newtype DecoderState = DecoderState Word8
   deriving (Eq, Show)
@@ -152,13 +166,14 @@ utf8RejectState :: DecoderState
 utf8RejectState = DecoderState 12
 
 updateState :: ByteClass -> DecoderState -> DecoderState
-updateState (ByteClass c) (DecoderState s) = DecoderState (W8# el#)
-  where
-    !(I# n#) = word8ToInt (c + s)
-    el# = indexWord8OffAddr# table# n#
+updateState (ByteClass c) (DecoderState s) =
+  DecoderState (A.unsafeIndex stateTable (word8ToInt (c + s)))
 
-    table# :: Addr#
-    table# = "\NUL\f\CAN$<`T\f\f\f0H\f\f\f\f\f\f\f\f\f\f\f\f\f\NUL\f\f\f\f\f\NUL\f\NUL\f\f\f\CAN\f\f\f\f\f\CAN\f\CAN\f\f\f\f\f\f\f\f\f\CAN\f\f\f\f\f\CAN\f\f\f\f\f\f\f\CAN\f\f\f\f\f\f\f\f\f$\f$\f\f\f$\f\f\f\f\f$\f$\f\f\f$\f\f\f\f\f\f\f\f\f\f"#
+-- | The transitions of the state machine, as an array of bytes.
+stateTable :: A.Array
+stateTable = tableFromString
+  "\NUL\f\CAN$<`T\f\f\f0H\f\f\f\f\f\f\f\f\f\f\f\f\f\NUL\f\f\f\f\f\NUL\f\NUL\f\f\f\CAN\f\f\f\f\f\CAN\f\CAN\f\f\f\f\f\f\f\f\f\CAN\f\f\f\f\f\CAN\f\f\f\f\f\f\f\CAN\f\f\f\f\f\f\f\f\f$\f$\f\f\f$\f\f\f\f\f$\f$\f\f\f$\f\f\f\f\f\f\f\f\f\f"
+{-# NOINLINE stateTable #-}
 
 updateDecoderState :: Word8 -> DecoderState -> DecoderState
 updateDecoderState b s = updateState (byteToClass b) s

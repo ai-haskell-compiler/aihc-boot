@@ -1,5 +1,5 @@
--- | List functions. The functions that compare elements work on Int
--- only: the boot base has no classes yet.
+-- | List functions. Data.Foldable has the versions for every Foldable
+-- type that the Prelude exports.
 module GHC.List
   ( filter,
     foldl,
@@ -53,6 +53,7 @@ where
 
 import GHC.Base
 import GHC.Classes
+import GHC.Err
 import GHC.Maybe
 import GHC.Num
 import GHC.Prim
@@ -205,27 +206,27 @@ span p xs@(x : xs')
 break :: (a -> Bool) -> [a] -> ([a], [a])
 break p = span (not . p)
 
-sum :: [Int] -> Int
+sum :: (Num a) => [a] -> a
 sum = foldl' (+) 0
 
-product :: [Int] -> Int
+product :: (Num a) => [a] -> a
 product = foldl' (*) 1
 
-maximum :: [Int] -> Int
+maximum :: (Ord a) => [a] -> a
 maximum [] = error "Prelude.maximum: empty list"
 maximum (x : xs) = foldl' max x xs
 
-minimum :: [Int] -> Int
+minimum :: (Ord a) => [a] -> a
 minimum [] = error "Prelude.minimum: empty list"
 minimum (x : xs) = foldl' min x xs
 
-elem :: Int -> [Int] -> Bool
+elem :: (Eq a) => a -> [a] -> Bool
 elem x = any (== x)
 
-notElem :: Int -> [Int] -> Bool
+notElem :: (Eq a) => a -> [a] -> Bool
 notElem x = all (/= x)
 
-lookup :: Int -> [(Int, b)] -> Maybe b
+lookup :: (Eq a) => a -> [(a, b)] -> Maybe b
 lookup _ [] = Nothing
 lookup k ((k', v) : rest)
   | k == k' = Just v

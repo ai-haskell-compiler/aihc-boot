@@ -1,4 +1,3 @@
-{-# LANGUAGE MagicHash #-}
 
 -- |
 -- Module      : Data.Text.Internal.Unsafe.Char
@@ -24,16 +23,17 @@ module Data.Text.Internal.Unsafe.Char (
 
 import Control.Monad.ST (ST)
 import Data.Text.Internal.Encoding.Utf8
-import GHC.Exts (Char(..), Int(..), chr#, ord#, word2Int#, word8ToWord#)
-import GHC.Word (Word8(..))
+import qualified Data.Char
+import Data.Word (Word8)
+import GHC.Base (unsafeChr)
 import qualified Data.Text.Array as A
 
 ord :: Char -> Int
-ord (C# c#) = I# (ord# c#)
+ord = Data.Char.ord
 {-# INLINE ord #-}
 
 unsafeChr8 :: Word8 -> Char
-unsafeChr8 (W8# w#) = C# (chr# (word2Int# (word8ToWord# w#)))
+unsafeChr8 w = unsafeChr (fromIntegral w)
 {-# INLINE unsafeChr8 #-}
 
 -- | Write a character into the array at the given offset.  Returns

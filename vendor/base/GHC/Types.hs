@@ -5,6 +5,7 @@
 module GHC.Types
   ( List (..),
     Int,
+    Word,
     Char,
     Bool (..),
     Ordering (..),
@@ -22,6 +23,9 @@ data List a = [] | a : List a
 
 -- | Fixed-precision integers. The representation is primitive.
 data Int
+
+-- | Unsigned machine words. The representation is primitive.
+data Word
 
 -- | Unicode characters. The representation is primitive.
 data Char

@@ -9,12 +9,10 @@ module Data.ByteString.Internal.Pure (
   ) where
 
 import Prelude
-import GHC.Exts (Ptr(..), Word8#, Int#, indexWord8OffAddr#)
-import GHC.Types                (Int (..))
-import GHC.Word                 (Word8(..))
-import GHC.Int                  (Int8(..))
+import Data.Int                 (Int8)
 import Data.Word
-import Foreign.Ptr              (plusPtr, nullPtr)
+import Foreign.Ptr              (Ptr, plusPtr, nullPtr)
+import System.IO.Unsafe         (unsafeDupablePerformIO)
 import Foreign.Storable         (Storable(..))
 import Control.Exception        (assert)
 
@@ -39,12 +37,13 @@ memcmp !p1 !p2 !len
          | otherwise -> pure 1
 
 isValidUtf8 :: Ptr Word8 -> Int -> IO Bool
-isValidUtf8 !(Ptr a) !len' = isValidUtf8' (indexWord8OffAddr# a) len'
+isValidUtf8 !p !len' = isValidUtf8' (\i -> unsafeDupablePerformIO (peekByteOff p i)) len'
 
-isValidUtf8' :: (Int# -> Word8#) -> Int -> IO Bool
-isValidUtf8' idx !len = go 0
+-- The aihc-boot cut-down reads the bytes with 'peekByteOff'. Upstream
+-- reads them with 'indexWord8OffAddr#'.
+isValidUtf8' :: (Int -> Word8) -> Int -> IO Bool
+isValidUtf8' indexWord8 !len = go 0
   where
-    indexWord8 (I# i) = W8# (idx i)
 
     indexIsCont :: Int -> Bool
     indexIsCont i =

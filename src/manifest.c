@@ -566,7 +566,7 @@ char *manifest(const char *target, char **out)
     return NULL;
 }
 
-char *program(const char *target, Program **out)
+char *program(const char *target, Program **out, Vec *packages_out)
 {
     StrMap packages = vendored_packages();
     Vec order;
@@ -580,14 +580,17 @@ char *program(const char *target, Program **out)
     }
     builtins = builtin_modules(&order);
     p = program_new(&builtins);
+    if (packages_out != NULL) {
+        vec_init(packages_out);
+    }
     for (i = 0; i < order.len; i++) {
         const char *name = (const char *)order.items[i];
         const CabalPackage *cabal = (const CabalPackage *)strmap_get(&packages, name);
         Vec files = haskell_files(package_dir(name));
-        Package package;
-        package.name = xstrdup(name);
-        package.extensions = cabal->extensions;
-        vec_init(&package.modules);
+        Package *pkg = (Package *)xcalloc(1, sizeof *pkg);
+        pkg->name = xstrdup(name);
+        pkg->extensions = cabal->extensions;
+        vec_init(&pkg->modules);
         for (j = 0; j < files.len; j++) {
             const char *file = (const char *)files.items[j];
             size_t len;
@@ -606,9 +609,12 @@ char *program(const char *target, Program **out)
             source = (SourceModule *)xmalloc(sizeof *source);
             source->path = xstrdup(file);
             source->module = module;
-            vec_push(&package.modules, source);
+            vec_push(&pkg->modules, source);
         }
-        program_add_package(p, &package);
+        program_add_package(p, pkg);
+        if (packages_out != NULL) {
+            vec_push(packages_out, pkg);
+        }
     }
     *out = p;
     return NULL;

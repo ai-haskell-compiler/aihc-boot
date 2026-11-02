@@ -6,11 +6,11 @@ f = \ a1 a2 ->
             } in
             let {
               guard{2} = case GHC.Base.otherwise of {
-                  True -> f (GHC.Num.(-) a1 1) xs;
+                  True -> f (GHC.Num.(-) GHC.Num.({Num Int}) a1 1) xs;
                   _ -> next;
                 };
             } in
-            case GHC.Classes.(>) x a1 of {
+            case GHC.Classes.(>) GHC.Classes.({Ord Int}) x a1 of {
               True -> x;
               _ -> next;
             };
@@ -32,26 +32,26 @@ g = \ m ->
     let {
       alt{2} = case scrut of {
           Just _ -> case _ of {
-              (,) a _ -> GHC.Num.(+) a 1;
+              (,) a _ -> GHC.Num.(+) GHC.Num.({Num Int}) a 1;
             };
           _ -> next;
         };
       alt{3} = case scrut of {
           Nothing -> 0;
-          _ -> GHC.Prim.error "case: no alternative matched";
+          _ -> GHC.Err.error "case: no alternative matched";
         };
     } in
     case scrut of {
       Just _ -> case _ of {
-          (,) a b -> case GHC.Classes.(==) a b of {
+          (,) a b -> case GHC.Classes.(==) GHC.Classes.({Eq Int}) a b of {
               True -> a;
               _ -> next;
             };
         };
       _ -> next;
     }
-main = GHC.Base.(>>) (System.IO.print (f 3 ((:) 1 ((:) 2 ((:) 3 []))))) (GHC.Base.(>>=) System.IO.getLine (\ x ->
+main = GHC.Base.(>>) GHC.Base.({Monad IO}) (System.IO.print GHC.Show.({Show Int}) (f 3 ((:) 1 ((:) 2 ((:) 3 []))))) (GHC.Base.(>>=) GHC.Base.({Monad IO}) System.IO.getLine (\ x ->
         let {
-          n = GHC.List.length x;
+          n = Data.Foldable.length Data.Foldable.({Foldable List}) x;
         } in
-        System.IO.print (g (Just ((,) n n)))))
+        System.IO.print GHC.Show.({Show Int}) (g (Just ((,) n n)))))

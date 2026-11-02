@@ -19,6 +19,7 @@ typedef struct {
     int implicit;      /* 1: an implicit block; 0: explicit braces */
     unsigned long col; /* implicit blocks: the column of the first token */
     unsigned long depth; /* the bracket depth when the block opened */
+    int nosemi;        /* the alternatives of a multi-way if: no `;` */
 } Context;
 
 typedef struct {
@@ -36,6 +37,7 @@ static void push(Stack *s, int implicit, unsigned long col, unsigned long depth)
     s->items[s->len].implicit = implicit;
     s->items[s->len].col = col;
     s->items[s->len].depth = depth;
+    s->items[s->len].nosemi = 0;
     s->len++;
 }
 
@@ -101,6 +103,9 @@ int layout(const TokenVec *in, TokenVec *out, SyntaxError *err)
     /* The previous token was `\`, so a following `case` opens a block
      * (LambdaCase). */
     int after_backslash = 0;
+    /* The previous token was `if`, so a following `|` opens a block of
+     * alternatives (MultiWayIf). */
+    int after_if = 0;
     size_t i;
 
     stack.items = NULL;
@@ -163,6 +168,14 @@ int layout(const TokenVec *in, TokenVec *out, SyntaxError *err)
             }
         }
 
+        if (after_if && tok.kind == TOK_RESERVEDOP && tok.ch == OP_BAR) {
+            push(&stack, 1, col, depth);
+            stack.items[stack.len - 1].nosemi = 1;
+            tokvec_push(out, virtual_token(TOK_VOPEN, pos));
+            prev_line = pos.line;
+        }
+        after_if = 0;
+
         if (is_eof) {
             while (stack.len > 0) {
                 Context ctx = stack.items[--stack.len];
@@ -186,6 +199,8 @@ int layout(const TokenVec *in, TokenVec *out, SyntaxError *err)
                 if (c != NULL && c->implicit && col < c->col) {
                     stack.len--;
                     tokvec_push(out, virtual_token(TOK_VCLOSE, pos));
+                } else if (c != NULL && c->implicit && col == c->col && c->nosemi) {
+                    break;
                 } else if (c != NULL && c->implicit && col == c->col) {
                     /* `where` cannot start a block item. The parse-error
                      * rule closes the block instead, so a `where` at the
@@ -231,6 +246,7 @@ int layout(const TokenVec *in, TokenVec *out, SyntaxError *err)
             pending_open = 1;
         }
         after_backslash = tok.kind == TOK_RESERVEDOP && tok.ch == OP_BACKSLASH;
+        after_if = is_keyword(&tok, KW_IF);
 
         tokvec_push(out, tok);
     }

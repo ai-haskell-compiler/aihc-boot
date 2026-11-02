@@ -63,6 +63,8 @@ int p_expect_varsym(Parser *p, const char *sym);
  * on error and fills *items (void *) on success. */
 typedef void *(*ItemFn)(Parser *p, void *env);
 int p_block(Parser *p, ItemFn item, void *env, Vec *items);
+/* A block of items that start with `|`, without `;` between them. */
+int p_guard_block(Parser *p, ItemFn item, void *env, Vec *items);
 QName *p_parenthesized_name(Parser *p);
 QName *p_qname(Parser *p);
 

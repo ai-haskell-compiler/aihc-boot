@@ -28,7 +28,7 @@ main = do
   print (head (filter (> 100) (map (* 3) [1 ..])))
   let xs = map (* 2) [1 .. 5]
   print (sum xs + product xs)
-  print (snd (let p = (p, 3) in p))
+  print (snd (let p = (fst p, 3) in p))
   print (take 1 [x | x <- [1 ..], x > 1000] !! 0)
   print (case undefinedTail of (x : _) -> x)
   print (seq (3 :: Int) 4)

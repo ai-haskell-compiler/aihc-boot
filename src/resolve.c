@@ -58,6 +58,16 @@ typedef struct {
     const Scope *scope;
     /* The local term names in scope, innermost last. */
     LocalVec locals;
+    /* The type variables that an explicit forall binds, innermost last. */
+    LocalVec tylocals;
+    /* The type variables of the explicit forall of each signature, by the
+     * name of the binding (LocalVec *). They scope over the binding, as
+     * with ScopedTypeVariables. */
+    StrMap sig_scopes;
+    /* When set, a variable of a pattern is a binder that bind_group made
+     * already, at or after index bound_from of locals. */
+    int bind_existing;
+    size_t bound_from;
     unsigned long next_local;
     OccVec out;
 } Resolver;
@@ -190,6 +200,9 @@ static unsigned long bind_local(Resolver *r, const char *name)
 }
 
 static ResolveError *ty(Resolver *r, const Type *t);
+static ResolveError *sig_type(Resolver *r, const Type *t, const Vec *names);
+static ResolveError *bind_tyvars(Resolver *r, const Vec *binders);
+static size_t push_sig_scope(Resolver *r, const char *name);
 static ResolveError *context(Resolver *r, const Type *ctx);
 static ResolveError *expr(Resolver *r, const Expr *e);
 static ResolveError *rhs(Resolver *r, const Rhs *x);
@@ -243,6 +256,7 @@ static ResolveError *top_bind(Resolver *r, Pos pos, const Lhs *lhs, const Rhs *x
     Target target;
     unsigned long saved;
     size_t mark;
+    size_t tymark;
     ResolveError *result;
     if (!fun_lhs(lhs, &name, &ps)) {
         return unsupported("this binding", &pos);
@@ -271,10 +285,12 @@ static ResolveError *top_bind(Resolver *r, Pos pos, const Lhs *lhs, const Rhs *x
         r->next_local = 0;
     }
     mark = r->locals.len;
+    tymark = push_sig_scope(r, name);
     result = pats(r, &ps);
     if (result == NULL) {
         result = rhs(r, x);
     }
+    r->tylocals.len = tymark;
     r->locals.len = mark;
     if (reset) {
         r->next_local = saved;
@@ -299,8 +315,12 @@ static ResolveError *data_decl(Resolver *r, const Decl *decl)
     }
     for (i = 0; i < decl->cons.len; i++) {
         const ConDecl *con = (const ConDecl *)decl->cons.items[i];
-        if (con->forall.len > 0 || con->ctx != NULL) {
-            return unsupported("an existential constructor", &con->pos);
+        size_t tymark = r->tylocals.len;
+        if ((e = bind_tyvars(r, &con->forall)) != NULL) {
+            return e;
+        }
+        if (con->ctx != NULL && (e = context(r, con->ctx)) != NULL) {
+            return e;
         }
         switch (con->kind) {
         case CON_PREFIX:
@@ -337,6 +357,7 @@ static ResolveError *data_decl(Resolver *r, const Decl *decl)
             }
             break;
         }
+        r->tylocals.len = tymark;
     }
     for (i = 0; i < decl->deriving.len; i++) {
         const Deriving *clause = (const Deriving *)decl->deriving.items[i];
@@ -397,7 +418,7 @@ static ResolveError *top_decl(Resolver *r, const Decl *decl)
             const char *name = ((const Ident *)decl->names.items[i])->name;
             emit(r, narrow(decl->pos, name), NS_TERM, lookup_top(r, SPACE_TERM, name));
         }
-        return ty(r, decl->ty);
+        return sig_type(r, decl->ty, &decl->names);
     case DECL_FIXITY:
         return NULL;
     case DECL_FOREIGN:
@@ -495,6 +516,55 @@ static ResolveError *top_decl(Resolver *r, const Decl *decl)
     }
 }
 
+/* The variables of a pattern, in order (char *). */
+static void pat_vars(const Pat *p, Vec *out)
+{
+    size_t i;
+    switch (p->kind) {
+    case PAT_VAR:
+        vec_push(out, p->var.name);
+        break;
+    case PAT_AS:
+        vec_push(out, p->var.name);
+        pat_vars(p->a, out);
+        break;
+    case PAT_CON:
+    case PAT_TUPLE:
+    case PAT_LIST:
+        for (i = 0; i < p->args.len; i++) {
+            pat_vars((const Pat *)p->args.items[i], out);
+        }
+        break;
+    case PAT_INFIX:
+        pat_vars(p->a, out);
+        for (i = 0; i < p->steps.len; i++) {
+            pat_vars((const Pat *)((const InfixStep *)p->steps.items[i])->operand, out);
+        }
+        break;
+    case PAT_RECORD:
+        for (i = 0; i < p->fields.len; i++) {
+            const FieldPat *f = (const FieldPat *)p->fields.items[i];
+            if (f->pat != NULL) {
+                pat_vars(f->pat, out);
+            } else {
+                vec_push(out, (void *)bare(f->name.name));
+            }
+        }
+        break;
+    case PAT_PAREN:
+    case PAT_LAZY:
+    case PAT_BANG:
+    case PAT_VIEW:
+    case PAT_SIG:
+        pat_vars(p->a, out);
+        break;
+    default:
+        break;
+    }
+}
+
+static ResolveError *pat(Resolver *r, const Pat *p, LocalVec *bound);
+
 /* The binders of a group of local declarations, of a `where` or a `let`.
  * They are in scope for the whole group and its body; the caller
  * truncates the scope. Sets *group to where the group starts in the local
@@ -515,7 +585,13 @@ static ResolveError *bind_group(Resolver *r, const Vec *decls, size_t *group)
             } else if (decl->lhs.kind == LHS_INFIX) {
                 bind_local(r, bare(decl->lhs.name.name));
             } else {
-                return unsupported("a local pattern binding", &decl->pos);
+                Vec vars;
+                size_t j;
+                vec_init(&vars);
+                pat_vars(decl->lhs.pat, &vars);
+                for (j = 0; j < vars.len; j++) {
+                    bind_local(r, (const char *)vars.items[j]);
+                }
             }
             break;
         case DECL_TYPE_SIG:
@@ -554,22 +630,40 @@ static ResolveError *group_decls(Resolver *r, size_t group, const Vec *decls)
                     }
                 }
             }
-            if ((e = ty(r, decl->ty)) != NULL) {
+            if ((e = sig_type(r, decl->ty, &decl->names)) != NULL) {
+                return e;
+            }
+        } else if (decl->kind == DECL_BIND && decl->lhs.kind == LHS_PAT) {
+            /* A pattern binding: its variables are the binders of the
+             * group. */
+            LocalVec none;
+            memset(&none, 0, sizeof none);
+            r->bind_existing = 1;
+            r->bound_from = group;
+            e = pat(r, decl->lhs.pat, &none);
+            r->bind_existing = 0;
+            if (e == NULL) {
+                e = rhs(r, decl->rhs);
+            }
+            if (e != NULL) {
                 return e;
             }
         } else if (decl->kind == DECL_BIND) {
             const char *name;
             Vec ps;
             size_t mark;
+            size_t tymark;
             if (!fun_lhs(&decl->lhs, &name, &ps)) {
                 return unsupported("this binding", &decl->pos);
             }
             emit(r, narrow(decl->pos, name), NS_TERM, lookup_top(r, SPACE_TERM, name));
             mark = r->locals.len;
+            tymark = push_sig_scope(r, name);
             e = pats(r, &ps);
             if (e == NULL) {
                 e = rhs(r, decl->rhs);
             }
+            r->tylocals.len = tymark;
             r->locals.len = mark;
             if (e != NULL) {
                 return e;
@@ -663,7 +757,18 @@ static ResolveError *rhs(Resolver *r, const Rhs *x)
 
 static void pat_binder(Resolver *r, const Ident *name, LocalVec *bound)
 {
-    unsigned long id = r->next_local++;
+    unsigned long id;
+    if (r->bind_existing) {
+        size_t k = r->locals.len;
+        while (k > r->bound_from) {
+            k--;
+            if (str_eq(r->locals.items[k].name, name->name)) {
+                emit(r, span(name->span), NS_TERM, target_local(r->locals.items[k].id));
+                return;
+            }
+        }
+    }
+    id = r->next_local++;
     emit(r, span(name->span), NS_TERM, target_local(id));
     locals_push(bound, name->name, id);
 }
@@ -720,6 +825,33 @@ static ResolveError *pat(Resolver *r, const Pat *p, LocalVec *bound)
             return e;
         }
         return ty(r, p->ty);
+    case PAT_VIEW:
+        if ((e = expr(r, p->expr)) != NULL) {
+            return e;
+        }
+        return pat(r, p->a, bound);
+    case PAT_TYPE_ARG:
+        return ty(r, p->ty);
+    case PAT_RECORD:
+        emit(r, span(p->con.span), NS_TERM, lookup_q(r, SPACE_TERM, &p->con));
+        if (p->wildcard) {
+            return unsupported("a record wildcard in a pattern", NULL);
+        }
+        for (i = 0; i < p->fields.len; i++) {
+            const FieldPat *f = (const FieldPat *)p->fields.items[i];
+            emit(r, span(f->name.span), NS_TERM, lookup_q(r, SPACE_TERM, &f->name));
+            if (f->pat != NULL) {
+                if ((e = pat(r, f->pat, bound)) != NULL) {
+                    return e;
+                }
+            } else {
+                Ident id;
+                id.name = (char *)bare(f->name.name);
+                id.span = f->name.span;
+                pat_binder(r, &id, bound);
+            }
+        }
+        return NULL;
     case PAT_LIT:
         /* As for a literal expression, plus the `==` of the comparison
          * and the `negate` of a negative literal. A character or string
@@ -908,6 +1040,130 @@ static ResolveError *expr(Resolver *r, const Expr *x)
         return alts(r, &x->alts);
     case EXPR_LAMBDA_CASE:
         return alts(r, &x->alts);
+    case EXPR_NEG:
+        if ((e = expr(r, x->a)) != NULL) {
+            return e;
+        }
+        emit(r, span(x->span), NS_TERM,
+             program_builtin(r->program, r->module, SPACE_TERM, "negate"));
+        return NULL;
+    case EXPR_ARITH_SEQ: {
+        const char *method;
+        if ((e = expr(r, x->a)) != NULL) {
+            return e;
+        }
+        if (x->b != NULL && (e = expr(r, x->b)) != NULL) {
+            return e;
+        }
+        if (x->c != NULL && (e = expr(r, x->c)) != NULL) {
+            return e;
+        }
+        method = x->b != NULL ? (x->c != NULL ? "enumFromThenTo" : "enumFromThen")
+                              : (x->c != NULL ? "enumFromTo" : "enumFrom");
+        emit(r, span(x->span), NS_TERM, program_builtin(r->program, r->module, SPACE_TERM, method));
+        return NULL;
+    }
+    case EXPR_TUPLE_SECTION:
+        for (i = 0; i < x->items.len; i++) {
+            const Expr *item = (const Expr *)x->items.items[i];
+            if (item != NULL && (e = expr(r, item)) != NULL) {
+                return e;
+            }
+        }
+        emit(r, span(x->span), NS_TERM, target_syntax());
+        return NULL;
+    case EXPR_DO:
+        /* Each statement but the last one names the method that
+         * sequences it, at the span of the statement. */
+        mark = r->locals.len;
+        e = NULL;
+        for (i = 0; i < x->stmts.len && e == NULL; i++) {
+            const Stmt *stmt = (const Stmt *)x->stmts.items[i];
+            int last = i + 1 == x->stmts.len;
+            Vec one;
+            switch (stmt->kind) {
+            case STMT_EXPR:
+                e = expr(r, stmt->expr);
+                if (e == NULL && !last) {
+                    emit(r, span(stmt->span), NS_TERM,
+                         program_builtin(r->program, r->module, SPACE_TERM, ">>"));
+                }
+                break;
+            case STMT_BIND:
+                e = expr(r, stmt->expr);
+                if (e == NULL) {
+                    vec_init(&one);
+                    vec_push(&one, stmt->pat);
+                    e = pats(r, &one);
+                }
+                if (e == NULL && !last) {
+                    emit(r, span(stmt->span), NS_TERM,
+                         program_builtin(r->program, r->module, SPACE_TERM, ">>="));
+                }
+                break;
+            case STMT_LET: {
+                size_t group;
+                e = bind_group(r, &stmt->decls, &group);
+                if (e == NULL) {
+                    e = group_decls(r, group, &stmt->decls);
+                }
+                break;
+            }
+            }
+        }
+        r->locals.len = mark;
+        return e;
+    case EXPR_LIST_COMP:
+        mark = r->locals.len;
+        e = stmts(r, &x->stmts);
+        if (e == NULL) {
+            e = expr(r, x->a);
+        }
+        r->locals.len = mark;
+        return e;
+    case EXPR_MULTI_IF:
+        for (i = 0; i < x->guards.len; i++) {
+            const GuardedRhs *g = (const GuardedRhs *)x->guards.items[i];
+            mark = r->locals.len;
+            e = stmts(r, &g->guards);
+            if (e == NULL) {
+                e = expr(r, g->body);
+            }
+            r->locals.len = mark;
+            if (e != NULL) {
+                return e;
+            }
+        }
+        return NULL;
+    case EXPR_RECORD_CON:
+        emit(r, span(x->name.span), NS_TERM, lookup_q(r, SPACE_TERM, &x->name));
+        if (x->wildcard) {
+            return unsupported("a record wildcard in an expression", NULL);
+        }
+        for (i = 0; i < x->fields.len; i++) {
+            const FieldUpdate *f = (const FieldUpdate *)x->fields.items[i];
+            if (f->value != NULL) {
+                if ((e = expr(r, f->value)) != NULL) {
+                    return e;
+                }
+            } else {
+                /* A pun: the field name is a variable. */
+                emit(r, span(f->name.span), NS_TERM, lookup_q(r, SPACE_TERM, &f->name));
+            }
+        }
+        return NULL;
+    case EXPR_RECORD_UPDATE:
+        if ((e = expr(r, x->a)) != NULL) {
+            return e;
+        }
+        for (i = 0; i < x->fields.len; i++) {
+            const FieldUpdate *f = (const FieldUpdate *)x->fields.items[i];
+            emit(r, span(f->name.span), NS_TERM, lookup_q(r, SPACE_TERM, &f->name));
+            if (f->value != NULL && (e = expr(r, f->value)) != NULL) {
+                return e;
+            }
+        }
+        return NULL;
     default:
         return unsupported("this expression", NULL);
     }
@@ -915,14 +1171,94 @@ static ResolveError *expr(Resolver *r, const Expr *x)
 
 /* --- Types --------------------------------------------------------------- */
 
+/* Bind the type variables of a forall. Each kind sees the variables
+ * before it. The caller truncates r->tylocals. */
+static ResolveError *bind_tyvars(Resolver *r, const Vec *binders)
+{
+    size_t i;
+    ResolveError *e;
+    for (i = 0; i < binders->len; i++) {
+        const TyVarBind *tv = (const TyVarBind *)binders->items[i];
+        if (tv->kind != NULL && (e = ty(r, tv->kind)) != NULL) {
+            return e;
+        }
+        locals_push(&r->tylocals, tv->name.name, r->next_local++);
+    }
+    return NULL;
+}
+
+/* The type of a signature for the bindings names (Ident *). The
+ * variables of an outer explicit forall scope over the bindings. */
+static ResolveError *sig_type(Resolver *r, const Type *t, const Vec *names)
+{
+    size_t mark = r->tylocals.len;
+    LocalVec *scoped;
+    ResolveError *e;
+    size_t i;
+    if (t->kind != TY_FORALL) {
+        return ty(r, t);
+    }
+    if ((e = bind_tyvars(r, &t->binders)) != NULL) {
+        return e;
+    }
+    scoped = (LocalVec *)xcalloc(1, sizeof *scoped);
+    for (i = mark; i < r->tylocals.len; i++) {
+        locals_push(scoped, r->tylocals.items[i].name, r->tylocals.items[i].id);
+    }
+    for (i = 0; i < names->len; i++) {
+        strmap_put(&r->sig_scopes, bare(((const Ident *)names->items[i])->name), scoped);
+    }
+    e = ty(r, t->a);
+    r->tylocals.len = mark;
+    return e;
+}
+
+/* Bring the scoped type variables of the signature of name into scope.
+ * Returns the mark to truncate r->tylocals to. */
+static size_t push_sig_scope(Resolver *r, const char *name)
+{
+    size_t mark = r->tylocals.len;
+    const LocalVec *scoped = (const LocalVec *)strmap_get(&r->sig_scopes, name);
+    size_t i;
+    for (i = 0; scoped != NULL && i < scoped->len; i++) {
+        locals_push(&r->tylocals, scoped->items[i].name, scoped->items[i].id);
+    }
+    return mark;
+}
+
 static ResolveError *ty(Resolver *r, const Type *t)
 {
     ResolveError *e;
     size_t i;
     switch (t->kind) {
     case TY_VAR:
+        /* A variable of an explicit forall is a local; an implicitly
+         * quantified one has no record. */
+        i = r->tylocals.len;
+        while (i > 0) {
+            i--;
+            if (str_eq(r->tylocals.items[i].name, t->var.name)) {
+                emit(r, span(t->var.span), NS_TYPE, target_local(r->tylocals.items[i].id));
+                break;
+            }
+        }
+        return NULL;
     case TY_WILDCARD:
         return NULL;
+    case TY_FORALL: {
+        /* As in aihc-resolve, the binders of a forall inside a type
+         * number from zero again. */
+        size_t mark = r->tylocals.len;
+        unsigned long saved = r->next_local;
+        r->next_local = 0;
+        e = bind_tyvars(r, &t->binders);
+        r->next_local = saved;
+        if (e == NULL) {
+            e = ty(r, t->a);
+        }
+        r->tylocals.len = mark;
+        return e;
+    }
     case TY_CON:
         if (str_eq(t->con.name, "()")) {
             emit(r, span(t->con.span), NS_TYPE, target_syntax());
@@ -930,7 +1266,8 @@ static ResolveError *ty(Resolver *r, const Type *t)
         }
         if (str_eq(t->con.name, "->") || str_eq(t->con.name, "[]")
             || str_starts_with(t->con.name, "(,")) {
-            return unsupported("this built-in type constructor", &t->con.span.start);
+            /* Built-in type constructors have no record. */
+            return NULL;
         }
         emit(r, span(t->con.span), NS_TYPE, lookup_q(r, SPACE_TYPE, &t->con));
         return NULL;

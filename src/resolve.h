@@ -8,8 +8,8 @@
  *
  * A Program holds the top-level names of every package (see scope.c), and
  * resolve_module resolves one module of it (see resolve.c). The resolver
- * handles the constructs of the vendored `base` and `deepseq`. It refuses
- * the others with a "not supported yet" error.
+ * handles the constructs of the vendored `base`, `deepseq`, `bytestring`
+ * and `text`. It refuses the others with a "not supported yet" error.
  */
 #ifndef AIHC_RESOLVE_H
 #define AIHC_RESOLVE_H
@@ -196,8 +196,7 @@ const Scope *program_scope(const Program *p, const char *module,
 const Vec *program_children(const Program *p, const Entity *parent);
 /* The target of a name that desugaring applies without an import, such
  * as `fromInteger` for an integer literal: the name in the exports of the
- * builtin modules other than module itself. An error target when no
- * builtin module exports it. */
+ * builtin modules. An error target when no builtin module exports it. */
 Target program_builtin(const Program *p, const char *module, Space space,
                        const char *name);
 

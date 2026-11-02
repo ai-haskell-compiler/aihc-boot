@@ -46,8 +46,10 @@ static Expr *operand(Parser *p)
 {
     if (p_at_varsym(p, "-")) {
         Expr *e = expr_new(EXPR_NEG);
+        Pos start = p_pos(p);
         p_bump(p);
         e->a = lexp(p);
+        e->span = p_span_from(p, start);
         return e->a ? e : NULL;
     }
     return lexp(p);
@@ -195,6 +197,31 @@ static int stmts(Parser *p, Vec *out)
 /* An expression with a keyword at the front, or an application. */
 static Expr *fexp(Parser *p);
 
+/* One alternative of a multi-way if: `| g1, g2 -> e`. */
+static void *multi_if_alt(Parser *p, void *env)
+{
+    GuardedRhs *g = (GuardedRhs *)xcalloc(1, sizeof(GuardedRhs));
+    (void)env;
+    if (p_expect_op(p, OP_BAR, "`|`") != 0) {
+        return NULL;
+    }
+    for (;;) {
+        Stmt *s = p_stmt(p);
+        if (s == NULL) {
+            return NULL;
+        }
+        vec_push(&g->guards, s);
+        if (!p_eat_special(p, ',')) {
+            break;
+        }
+    }
+    if (p_expect_op(p, OP_RIGHTARROW, "`->`") != 0) {
+        return NULL;
+    }
+    g->body = p_exp(p);
+    return g->body ? g : NULL;
+}
+
 static Expr *lexp(Parser *p)
 {
     Expr *e;
@@ -227,7 +254,14 @@ static Expr *lexp(Parser *p)
         return e->a ? e : NULL;
     }
     if (p_at_keyword(p, KW_IF)) {
+        const Token *next;
         p_bump(p);
+        next = p_tok_at(p, p->idx + 1);
+        if ((p_kind(p) == TOK_VOPEN || p_at_special(p, '{')) && next != NULL
+            && next->kind == TOK_RESERVEDOP && next->ch == OP_BAR) {
+            e = expr_new(EXPR_MULTI_IF);
+            return p_guard_block(p, multi_if_alt, NULL, &e->guards) == 0 ? e : NULL;
+        }
         e = expr_new(EXPR_IF);
         e->a = p_exp(p);
         if (e->a == NULL) {
@@ -519,6 +553,14 @@ static Expr *paren_exp(Parser *p)
         }
         r = expr_new(EXPR_PAREN);
         r->a = (Expr *)items.items[0];
+        if (r->a->kind == EXPR_NEG) {
+            /* As in aihc-parser, `(- e)` has the span of the
+             * parentheses, */
+            r->a->span = p_span_from(p, start);
+        } else if (r->a->kind == EXPR_INFIX && r->a->a->kind == EXPR_NEG) {
+            /* and so has the negation that starts `(- e + f)`. */
+            r->a->a->span = p_span_from(p, start);
+        }
         return r;
     }
     for (i = 0; i < items.len; i++) {
@@ -643,7 +685,7 @@ static int bind_arrow_ahead(const Parser *p)
 }
 
 /* One statement of a `do` block, a comprehension or a guard. */
-Stmt *p_stmt(Parser *p)
+static Stmt *p_stmt1(Parser *p)
 {
     Stmt *s = (Stmt *)xcalloc(1, sizeof(Stmt));
     if (p_at_keyword(p, KW_LET)) {
@@ -693,6 +735,16 @@ Stmt *p_stmt(Parser *p)
     s->kind = STMT_EXPR;
     s->expr = p_exp(p);
     return s->expr ? s : NULL;
+}
+
+Stmt *p_stmt(Parser *p)
+{
+    Pos start = p_pos(p);
+    Stmt *s = p_stmt1(p);
+    if (s != NULL) {
+        s->span = p_span_from(p, start);
+    }
+    return s;
 }
 
 /* --- Right-hand sides -------------------------------------------------- */

@@ -171,10 +171,13 @@ int tokenize(const char *src, size_t len, TokenVec *out, SyntaxError *err);
 /* A possibly qualified name. Operators keep their symbol spelling,
  * without parentheses. The span covers the name as written: with the
  * parentheses of `(+)`, but without the backquotes of `div`. */
+struct TcNote;
+
 typedef struct {
     char *qual;
     char *name;
     Span span;
+    struct TcNote *note; /* written by the typechecker (tc.h) */
 } QName;
 
 /* An unqualified name that a declaration or a pattern binds. The span
@@ -446,6 +449,7 @@ struct Decl {
     char *callconv; /* DECL_FOREIGN: `ccall`, `capi` or `prim` */
     char *safety;   /* optional: `safe`, `unsafe` or `interruptible` */
     Literal *entity; /* optional: the string before the name */
+    struct TcNote *note; /* written by the typechecker (tc.h) */
 };
 
 /* --- Bindings --- */
@@ -509,6 +513,7 @@ struct Pat {
     Expr *expr;
     Type *ty;
     Span span; /* PAT_LIT only: the literal, without a minus sign */
+    struct TcNote *note; /* written by the typechecker (tc.h) */
 };
 
 /* --- Expressions --- */
@@ -538,6 +543,7 @@ typedef struct {
     Pat *pat;
     Expr *expr;
     Vec decls; /* Decl * */
+    Span span;
 } Stmt;
 
 typedef enum {
@@ -552,6 +558,7 @@ typedef enum {
     EXPR_LAMBDA_CASE, /* alts: `\case { alts }` */
     EXPR_LET,         /* decls a: `let decls in e` */
     EXPR_IF,          /* a b c */
+    EXPR_MULTI_IF,    /* guards: `if | g1 -> e1 | g2 -> e2` (MultiWayIf) */
     EXPR_CASE,        /* a alts */
     EXPR_DO,          /* stmts */
     EXPR_TUPLE,       /* items */
@@ -583,10 +590,13 @@ struct Expr {
     Vec stmts;  /* Stmt * */
     Vec items;  /* Expr * */
     Vec fields; /* FieldUpdate * */
+    Vec guards; /* GuardedRhs *: EXPR_MULTI_IF */
     int wildcard;
-    Span span;  /* EXPR_LIT, EXPR_LIST, EXPR_TUPLE and EXPR_TUPLE_SECTION
-                   only: the whole expression; the resolver reports the
-                   syntax terms of these at this span */
+    Span span;  /* EXPR_LIT, EXPR_LIST, EXPR_TUPLE, EXPR_TUPLE_SECTION,
+                   EXPR_NEG and EXPR_ARITH_SEQ only: the whole expression;
+                   the resolver reports the syntax terms of these at this
+                   span */
+    struct TcNote *note; /* written by the typechecker (tc.h) */
 };
 
 Type *type_new(TypeKind kind);

@@ -43,7 +43,9 @@ struct TypeInfo {
 struct ConInfo {
     const char *name; /* as written: `Just`, `:`, `[]`, `()`, `(,)` */
     int tag;          /* its index among the constructors of its type */
-    int arity;
+    int arity;        /* with the dictionaries of an existential constructor */
+    int ndicts;       /* the dictionaries before the fields */
+    Vec field_names;  /* const char *: the record fields, or empty */
     TypeInfo *type;
     void *value; /* the evaluator's static object of a nullary constructor */
 };
