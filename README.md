@@ -15,16 +15,16 @@ Updated daily by [a scheduled workflow](.github/workflows/progress.yml);
 history in [progress/history.csv](progress/history.csv).
 
 <!-- progress:start -->
-_Last change in progress: 2026-09-25. Boot compiler: built._
+_Last change in progress: 2026-11-02. Boot compiler: built._
 
 | Milestone | Done | Progress |
 | --- | ---: | --- |
 | **M1** Vendor | 11/19 | `██████░░░░` 57.9% |
 | **M2** Prune | 1/20 | `░░░░░░░░░░` 5.0% |
-| **M3** Parse | 232/238 | `██████████` 97.5% |
-| **M4** Resolve | 6/238 | `░░░░░░░░░░` 2.5% |
-| **M5** Typecheck | 0/238 | `░░░░░░░░░░` 0.0% |
-| **M6** Eval | — | `░░░░░░░░░░` 0.0% |
+| **M3** Parse | 248/254 | `██████████` 97.6% |
+| **M4** Resolve | 14/254 | `█░░░░░░░░░` 5.5% |
+| **M5** Typecheck | 0/254 | `░░░░░░░░░░` 0.0% |
+| **M6** Eval | 12/12 | `██████████` 100.0% |
 | **M7** Stage 1 | — | `░░░░░░░░░░` 0.0% |
 
 <details><summary>Per-package breakdown</summary>
@@ -38,7 +38,7 @@ _Last change in progress: 2026-09-25. Boot compiler: built._
 | aihc-hackage | simplify | not vendored |  |  |  |  |  | — |
 | aihc-parser | keep | vendored | 28 | 17315 → 17315 | 28/28 | 0/28 | 0/28 | — |
 | aihc-cpp | keep | vendored | 6 | 2376 → 2376 | 6/6 | 0/6 | 0/6 | — |
-| base | replace | vendored | 5 | 94 | 5/5 | 5/5 | 0/5 | — |
+| base | replace | vendored | 21 | 1348 | 21/21 | 13/21 | 0/21 | 12/12 |
 | ghc-prim | replace | not vendored |  |  |  |  |  | — |
 | containers | simplify | vendored | 6 | 22364 → 614 | 6/6 | 0/6 | 0/6 | — |
 | text | simplify | vendored | 14 | 20301 → 1026 | 13/14 | 0/14 | 0/14 | — |
