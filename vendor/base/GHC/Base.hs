@@ -16,6 +16,7 @@ module GHC.Base
     (>>=),
     (>>),
     return,
+    unIO,
     mapM_,
     sequence_,
     when,

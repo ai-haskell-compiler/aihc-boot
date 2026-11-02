@@ -5,7 +5,11 @@
 -- every @foreign import prim@; the string names the primitive.
 module GHC.Prim
   ( seq,
+    ErrorCall (..),
     error,
+    errorWithoutStackTrace,
+    primRaise,
+    primCatch,
     primIntAdd,
     primIntSub,
     primIntMul,
@@ -44,8 +48,26 @@ infixr 0 `seq`
 seq :: a -> b -> b
 seq !_ b = b
 
--- | Stop the program with a message.
-foreign import prim "error" error :: [Char] -> a
+-- | The exception that 'error' raises. GHC defines it in
+-- GHC.Exception.
+data ErrorCall = ErrorCall [Char]
+
+-- | Raise an 'ErrorCall' with a message.
+error :: [Char] -> a
+error s = primRaise (ErrorCall s)
+
+errorWithoutStackTrace :: [Char] -> a
+errorWithoutStackTrace s = primRaise (ErrorCall s)
+
+-- | Raise an exception. The evaluator unwinds the stack to the
+-- innermost 'primCatch'. The boot base has no Exception class yet, so
+-- the exception is the thrown value itself.
+foreign import prim "raise" primRaise :: e -> a
+
+-- | Run an action on the world. When it raises an exception, apply the
+-- handler to the exception and the world. The handler gets every
+-- exception: the boot base cannot select by type without classes.
+foreign import prim "catch" primCatch :: (World -> IORes a) -> (e -> World -> IORes a) -> World -> IORes a
 
 foreign import prim "intAdd" primIntAdd :: Int -> Int -> Int
 

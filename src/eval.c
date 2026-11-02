@@ -21,12 +21,21 @@
  * globals. The collector copies the live objects to a new space
  * (Cheney's algorithm) and doubles the space when it fills up.
  *
+ * Exceptions unwind the stack. A `catch` pushes a K_CATCH frame with
+ * the handler. A `raise` jumps (longjmp) to the innermost run of the
+ * machine, which pops frames until it finds a K_CATCH frame. Every
+ * thunk under evaluation on the way becomes a thunk again, so a later
+ * use evaluates it again. A nested run that finds its K_STOP frame
+ * jumps on to the run that called it. The outermost run reports an
+ * uncaught exception and stops the program.
+ *
  * Two rules keep allocation safe. First, a sequence of allocations
  * reserves its total size first, so no collection happens in the middle
  * of it. Second, a primitive reads its arguments before it allocates or
  * evaluates anything, because both can move objects, and it registers
  * every pointer it keeps across such a call as a root.
  */
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,8 +114,9 @@ typedef enum {
     K_UPDATE, /* a: the thunk to update with the value */
     K_ARG,    /* a: an argument waiting for a function */
     K_CASE,   /* code: the CORE_CASE; b: its environment */
-    K_PRIM    /* a: the arguments of a primitive (a PAP); n: the index of
+    K_PRIM,   /* a: the arguments of a primitive (a PAP); n: the index of
                  the argument being evaluated */
+    K_CATCH   /* a: the handler of an exception; b: the world */
 } FrameKind;
 
 typedef struct {
@@ -124,6 +134,10 @@ static size_t stack_cap;
 /* The machine registers. */
 static Obj *reg_env;
 static Obj *reg_val;
+static Obj *reg_exc; /* the exception that is being raised */
+
+/* The innermost run of the machine: a raise jumps to it. */
+static jmp_buf *cur_jump;
 
 static void push(FrameKind kind, Obj *a, Obj *b, const void *code, unsigned long n)
 {
@@ -193,6 +207,7 @@ static void pointer_fields(const Obj *o, unsigned long *first, unsigned long *la
         break;
     case O_FUN:
     case O_THUNK:
+    case O_BLACKHOLE: /* keeps its environment: an exception restores it */
         *first = 1;
         *last = 2;
         break;
@@ -243,6 +258,7 @@ static void gc(unsigned long need)
         }
         reg_env = copy(reg_env, from, from_end);
         reg_val = copy(reg_val, from, from_end);
+        reg_exc = copy(reg_exc, from, from_end);
         scan = to_space;
         while (scan < to_hp) {
             Obj *o = (Obj *)scan;
@@ -671,11 +687,31 @@ static Obj *p_int_show(Obj **a)
     return make_string(buf);
 }
 
-static Obj *p_error(Obj **a)
+/* Raise an exception: jump to the innermost run of the machine, which
+ * unwinds the stack. */
+static void raise_exception(Obj *exc)
 {
-    char *message = force_string(a[0]);
-    runtime_error(message);
+    reg_exc = exc;
+    longjmp(*cur_jump, 1);
+}
+
+/* `raise e`: the argument is not evaluated, as in GHC. */
+static Obj *p_raise(Obj **a)
+{
+    raise_exception(a[0]);
     return NULL;
+}
+
+/* `catch action handler world`: run the action on the world under a
+ * K_CATCH frame. The machine passes the result of the action through
+ * the frame. An exception applies the handler to the exception and the
+ * world. */
+static Obj *p_catch(Obj **a)
+{
+    Obj *action = a[0];
+    push(K_CATCH, a[1], a[2], NULL, 0);
+    push(K_ARG, a[2], NULL, NULL, 0);
+    return action;
 }
 
 static Obj *p_put_char(Obj **a)
@@ -765,7 +801,8 @@ static const PrimInfo prims[] = {
     {"ord", 1, 1, p_ord},
     {"chr", 1, 1, p_chr},
     {"intShow", 1, 1, p_int_show},
-    {"error", 1, 1, p_error},
+    {"raise", 1, 0, p_raise},
+    {"catch", 3, 0, p_catch},
     {"putChar", 2, 1, p_put_char},
     {"getChar", 1, 0, p_get_char},
     {"flush", 1, 0, p_flush},
@@ -788,15 +825,24 @@ const PrimInfo *prim_lookup(const char *name)
 
 #define MAX_PRIM_ARGS 8
 
-/* Call a primitive on its collected arguments (a PAP object). */
-static Obj *call_prim(const PrimInfo *info, const Obj *args)
+/* Call a primitive on its collected arguments: the PAP object of the
+ * K_PRIM frame on top of the stack. The frame keeps the arguments alive
+ * during the call. A primitive can push frames of its own (`catch`
+ * does), so the K_PRIM frame is then removed from under them. */
+static Obj *call_prim(const PrimInfo *info)
 {
     Obj *argv[MAX_PRIM_ARGS];
     unsigned long j;
+    size_t at = sp - 1;
+    Obj *args = stack[at].a;
+    Obj *result;
     for (j = 0; j < info->arity && j < MAX_PRIM_ARGS; j++) {
         argv[j] = W(args)[1 + j].p;
     }
-    return info->fn(argv);
+    result = info->fn(argv);
+    memmove(&stack[at], &stack[at + 1], (sp - at - 1) * sizeof *stack);
+    sp--;
+    return result;
 }
 
 /* The number of K_ARG frames on top of the stack. */
@@ -842,13 +888,12 @@ static const CoreAlt *select_alt(const Core *c, const Obj *v)
     return dflt;
 }
 
-/* Run the machine from an object until the K_STOP frame that this call
- * pushes is reached. Returns the value in weak head normal form. */
-static Obj *run(Obj *start)
+/* Run the machine from an object until the K_STOP frame on the stack
+ * is reached. Returns the value in weak head normal form. */
+static Obj *machine(Obj *start)
 {
     const Core *code = NULL;
     Obj *o;
-    push(K_STOP, NULL, NULL, NULL, 0);
     o = start;
     goto enter;
 
@@ -1103,8 +1148,7 @@ ret:
                     goto enter;
                 }
                 push(K_PRIM, args, NULL, info, arity);
-                o = call_prim(info, args);
-                sp--;
+                o = call_prim(info);
                 goto enter;
             }
         }
@@ -1124,12 +1168,106 @@ ret:
                 goto enter;
             }
             f->n = info->arity;
-            o = call_prim(info, args);
-            sp--;
+            o = call_prim(info);
             goto enter;
         }
+        case K_CATCH:
+            /* The action finished without an exception. */
+            sp--;
+            continue;
         }
     }
+}
+
+/* --- Exceptions --------------------------------------------------------- */
+
+/* The message of an exception that nothing catches. The boot base has
+ * no Show class yet, so the evaluator knows the exception types of the
+ * boot base by name. */
+static char *exception_message(Obj *exc)
+{
+    const ConInfo *con;
+    exc = force(exc);
+    if (KIND(exc) != O_CON) {
+        return xstrdup("uncaught exception");
+    }
+    con = (const ConInfo *)W(exc)[0].c;
+    if (str_eq(con->type->name, "ErrorCall") && con->arity == 1) {
+        return force_string(W(exc)[1].p);
+    }
+    if (str_eq(con->name, "DivideByZero")) {
+        return xstrdup("divide by zero");
+    }
+    return str_printf("uncaught exception: %s", con->name);
+}
+
+/* Pop the frames of the stack down to the K_STOP frame at base, after
+ * a raise. At a K_CATCH frame, return the handler with its arguments
+ * pushed, for the machine to enter. At the K_STOP frame, jump on to the
+ * run that called this run (prev), or report the exception when there
+ * is none. */
+static Obj *unwind(size_t base, jmp_buf *prev)
+{
+    for (;;) {
+        Frame *f = &stack[sp - 1];
+        switch (f->kind) {
+        case K_CATCH: {
+            Obj *handler = f->a;
+            Obj *world = f->b;
+            sp--;
+            push(K_ARG, world, NULL, NULL, 0);
+            push(K_ARG, reg_exc, NULL, NULL, 0);
+            reg_exc = NULL;
+            return handler;
+        }
+        case K_UPDATE:
+            /* The thunk is a black hole: make it a thunk again. */
+            set_hdr(f->a, O_THUNK, 2);
+            sp--;
+            break;
+        case K_STOP:
+            if (sp - 1 != base) {
+                runtime_error("the stack of an exception is not consistent");
+            }
+            sp--;
+            cur_jump = prev;
+            if (prev != NULL) {
+                longjmp(*prev, 1);
+            } else {
+                Obj *exc = reg_exc;
+                reg_exc = NULL;
+                runtime_error(exception_message(exc));
+            }
+            return NULL;
+        default:
+            sp--;
+            break;
+        }
+    }
+}
+
+/* Run the machine from an object until it returns to the K_STOP frame
+ * that this call pushes. Returns the value in weak head normal form.
+ * Every run is a target for a raise. */
+static Obj *run(Obj *start)
+{
+    jmp_buf jump;
+    jmp_buf *prev = cur_jump;
+    size_t base = sp;
+    size_t base_roots = nroots;
+    Obj *result;
+    push(K_STOP, NULL, NULL, NULL, 0);
+    cur_jump = &jump;
+    if (setjmp(jump) != 0) {
+        /* A raise: the roots of the primitives that this run called are
+         * gone. */
+        nroots = base_roots;
+        result = machine(unwind(base, prev));
+    } else {
+        result = machine(start);
+    }
+    cur_jump = prev;
+    return result;
 }
 
 /* --- Setup and entry ---------------------------------------------------- */
