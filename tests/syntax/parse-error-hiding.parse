@@ -1,0 +1,1 @@
+aihc-boot: tests/syntax/parse-error-hiding.hs:3:1: parse: expected `(` after `hiding`, found `;(virtual)`

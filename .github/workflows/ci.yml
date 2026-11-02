@@ -15,3 +15,14 @@ jobs:
       - run: nix flake check
       - name: Progress report for this revision
         run: nix develop .#tracker --command python3 scripts/progress.py >> "$GITHUB_STEP_SUMMARY"
+
+  # aihc-boot is plain C89, so any C compiler must build it. This job
+  # builds and tests it with the compilers of the runner, outside Nix.
+  c89:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - run: make CC=${{ matrix.cc }} check

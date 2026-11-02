@@ -1,0 +1,210 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
+module Aihc.Fc.Convert (ConvertEnv(..), emptyConvertEnv, withTyVar, withTyVars, withKindEnv, withClassTyCons, withSynonymTyCons, withExportedNames, exportedVis, convertKind, convertRep, convertType, convertTypeWithExpectedKind, convertPred, tyVarBinder, tyConNameFc, classDictTypeName, classDictConName, lookupAxiomName, funType, liftedRepType, typeRep, extraKindVars, invisibleKindArgs, visibleArgumentKinds, typeKindInEnv, evidenceArrows) where {
+import Aihc.Fc.Name;
+import Aihc.Fc.Syntax;
+import Aihc.Fc.Wired;
+import Aihc.Resolve (PackageId, ResolutionNamespace(..));
+import Aihc.Tc.Types (Pred(..), TcAxiomKey(..), TcKindEnv, TcKinds(..), TcType(..), TcTypeKey, TyCon, TyVarId(..), TypeScheme(..), Unique(..), runtimeRepFromKind, tvKind, tyConKey, tyConModuleName, tyConName, tyConNamespace, tyConPackageId, pattern AddrRep, pattern BoxedRep, pattern DoubleRep, pattern FloatRep, pattern Int16Rep, pattern Int32Rep, pattern Int64Rep, pattern Int8Rep, pattern IntRep, pattern KConstraint, pattern KFun, pattern KLevity, pattern KMeta, pattern KRuntimeRep, pattern KTYPE, pattern KVecCount, pattern KVecElem, pattern Lifted, pattern SumRep, pattern TupleRep, pattern Unlifted, pattern VecRep, pattern Word16Rep, pattern Word32Rep, pattern Word64Rep, pattern Word8Rep, pattern WordRep);
+import Aihc.Tc.Types qualified as Tc;
+import Control.Monad (zipWithM);
+import Data.Either (fromRight);
+import Data.Map.Strict (Map);
+import Data.Map.Strict qualified as Map;
+import Data.Set (Set);
+import Data.Set qualified as Set;
+import Data.Text (Text);
+import Data.Text qualified as T;
+data ConvertEnv = ConvertEnv { cePrimPackage :: PackageId, ceKinds :: TcKinds, ceTyVars :: Map Unique TyVarId, ceKindEnv :: TcKindEnv, ceClassTyCons :: Set TcTypeKey, ceSynonymTyCons :: Set TcTypeKey, ceExportedNames :: !(Maybe (Set (ResolutionNamespace, Text))) };
+emptyConvertEnv :: TcKinds -> PackageId -> ConvertEnv;
+emptyConvertEnv kinds package = ConvertEnv {cePrimPackage = package, ceKinds = kinds, ceTyVars = Map.empty, ceKindEnv = Map.empty, ceClassTyCons = Set.empty, ceSynonymTyCons = Set.empty, ceExportedNames = Nothing};
+withClassTyCons :: [TcTypeKey] -> ConvertEnv -> ConvertEnv;
+withClassTyCons keys env = env {ceClassTyCons = Set.fromList keys <> ceClassTyCons env};
+withSynonymTyCons :: [TcTypeKey] -> ConvertEnv -> ConvertEnv;
+withSynonymTyCons keys env = env {ceSynonymTyCons = Set.fromList keys <> ceSynonymTyCons env};
+withExportedNames :: Maybe (Set (ResolutionNamespace, Text)) -> ConvertEnv -> ConvertEnv;
+withExportedNames names env = env {ceExportedNames = names};
+exportedVis :: ConvertEnv -> ResolutionNamespace -> Text -> Vis;
+exportedVis env namespace name = case ceExportedNames env of {
+  Nothing -> Pub;
+  Just names -> if Set.member (namespace, name) names then Pub else Private};
+classDictTypeName :: TyCon -> Name;
+classDictTypeName tyCon = Name ("$Dict$" <> tyConName tyCon) SortTypeConstructor (OriginTop (tyConPackageId tyCon) (tyConModuleName tyCon));
+classDictConName :: TyCon -> Name;
+classDictConName tyCon = Name ("$Dict$" <> tyConName tyCon) SortDataConstructor (OriginTop (tyConPackageId tyCon) (tyConModuleName tyCon));
+lookupAxiomName :: TcAxiomKey -> Name;
+lookupAxiomName (TcAxiomKey package moduleName' name) = Name name SortAxiom (OriginTop package moduleName');
+withTyVar :: TyVarId -> ConvertEnv -> ConvertEnv;
+withTyVar tyVar env = env {ceTyVars = Map.insert (tvUnique tyVar) tyVar (ceTyVars env)};
+withTyVars :: [TyVarId] -> ConvertEnv -> ConvertEnv;
+withTyVars tyVars env = foldr withTyVar env tyVars;
+withKindEnv :: TcKindEnv -> ConvertEnv -> ConvertEnv;
+withKindEnv kindEnv env = env {ceKindEnv = kindEnv <> ceKindEnv env};
+convertKind :: ConvertEnv -> TcType -> Either String Type;
+convertKind env kind = case kind of {
+  KTYPE runtimeRep | BoxedRep Lifted <- runtimeRep -> Right (typeSynonym (cePrimPackage env)) | otherwise -> TyApp (TyCon (typeConstructor (cePrimPackage env))) <$> convertRep env runtimeRep;
+  KConstraint -> Right (typeSynonym (cePrimPackage env));
+  KRuntimeRep -> Right (TyCon (runtimeRepConstructor (cePrimPackage env)));
+  KLevity -> Right (TyCon (levityConstructor (cePrimPackage env)));
+  KVecCount -> Right (TyCon (wiredGhcTypes (cePrimPackage env) "VecCount" SortTypeConstructor));
+  KVecElem -> Right (TyCon (wiredGhcTypes (cePrimPackage env) "VecElem" SortTypeConstructor));
+  KFun argument result -> funType env <$> convertKind env argument <*> convertKind env result;
+  KMeta {} -> Left "kind still has a meta variable";
+  _ -> convertType env kind};
+convertRep :: ConvertEnv -> TcType -> Either String Type;
+convertRep env runtimeRep = case runtimeRep of {
+  BoxedRep Lifted -> Right (TyCon (liftedRepName (cePrimPackage env)));
+  BoxedRep Unlifted -> Right (TyCon (unliftedRepName (cePrimPackage env)));
+  IntRep -> Right (repCon env "IntRep");
+  Int8Rep -> Right (repCon env "Int8Rep");
+  Int16Rep -> Right (repCon env "Int16Rep");
+  Int32Rep -> Right (repCon env "Int32Rep");
+  Int64Rep -> Right (repCon env "Int64Rep");
+  WordRep -> Right (repCon env "WordRep");
+  Word8Rep -> Right (repCon env "Word8Rep");
+  Word16Rep -> Right (repCon env "Word16Rep");
+  Word32Rep -> Right (repCon env "Word32Rep");
+  Word64Rep -> Right (repCon env "Word64Rep");
+  AddrRep -> Right (repCon env "AddrRep");
+  FloatRep -> Right (repCon env "FloatRep");
+  DoubleRep -> Right (repCon env "DoubleRep");
+  TupleRep fields -> convertTuple fields;
+  SumRep fields -> do {
+  converted <- mapM (convertRep env) fields;
+  Right (TyApp (repCon env "SumRep") (runtimeRepList env converted))};
+  VecRep count element -> Right (TyApp (TyApp (repCon env "VecRep") (repCon env (T.pack (show count)))) (repCon env (T.pack (show element))));
+  TcTyVar tyVar -> let {
+  unique@(Unique uniqueValue) = tvUnique tyVar} in case Map.lookup unique (ceTyVars env) of {
+  Just found -> Right (tyVarType found);
+  Nothing -> Left ("unbound runtime-representation variable: rep" <> show uniqueValue)};
+  TcMetaTv {} -> Left "runtime representation still has a meta variable";
+  _ -> convertType env runtimeRep} where {
+  convertTuple fields = do {
+  converted <- mapM (convertRep env) fields;
+  Right (TyApp (repCon env "TupleRep") (runtimeRepList env converted))}};
+runtimeRepList :: ConvertEnv -> [Type] -> Type;
+runtimeRepList env = foldr cons nil where {
+  runtimeRep = TyCon (runtimeRepConstructor (cePrimPackage env));
+  nil = TyApp (repCon env "[]") runtimeRep;
+  cons item = TyApp (TyApp (TyApp (repCon env ":") runtimeRep) item)};
+repCon :: ConvertEnv -> Text -> Type;
+repCon env name = TyCon (wiredGhcTypes (cePrimPackage env) name SortDataConstructor);
+convertType :: ConvertEnv -> TcType -> Either String Type;
+convertType env = convertTypeWithExpectedKind env Nothing;
+convertTypeWithExpectedKind :: ConvertEnv -> Maybe TcType -> TcType -> Either String Type;
+convertTypeWithExpectedKind env expectedKind ty = case ty of {
+  TcTyVar tyVar -> Right (tyVarType tyVar);
+  TcTyLit literal -> Right (TyLit (tyConNameFc env (Tc.tyLitKindTyCon (ceKinds env) literal)) (convertTyLit literal));
+  TcMetaTv {} -> Left "type still has a meta variable";
+  TcTyCon tyCon [payload] | Tc.isImplicitParamTyConName (Tc.tyConName tyCon) -> convertType env payload;
+  TcTyCon tyCon [left, right] | Tc.isEqualityTyCon (ceKinds env) tyCon -> convertPred env (EqPred left right);
+  TcTyCon tyCon arguments -> do {
+  kindArgs <- invisibleKindArgs env tyCon arguments expectedKind;
+  argumentKinds <- visibleArgumentKinds env tyCon arguments expectedKind;
+  converted <- zipWithM (convertTypeWithExpectedKind env) (map Just argumentKinds <> repeat Nothing) arguments;
+  pure (foldl TyApp (TyCon (tyConNameFc env tyCon)) (kindArgs <> converted))};
+  TcFunTy argument result -> do {
+  convertedArgument <- convertType env argument;
+  convertedResult <- convertType env result;
+  r1 <- typeRep env argument;
+  r2 <- typeRep env result;
+  pure (TyFun r1 r2 convertedArgument convertedResult)};
+  TcForAllTy tyVar body -> do {
+  binder <- tyVarBinder env tyVar;
+  convertedBody <- convertType (withTyVar tyVar env) body;
+  pure (TyForAll binder convertedBody)};
+  TcQualTy predicates body -> do {
+  convertedPredicates <- mapM (convertPred env) predicates;
+  convertedBody <- convertType env body;
+  pure (evidenceArrows env body convertedPredicates convertedBody)};
+  TcAppTy function argument -> TyApp <$> convertType env function <*> convertType env argument;
+  TcArrowTy -> Right (TyCon (tyConNameFc env (kindsArrowTyCon (ceKinds env))))};
+convertTyLit :: Tc.TyLit -> TyLit;
+convertTyLit literal = case literal of {
+  Tc.TyLitNat value -> TyLitNat value;
+  Tc.TyLitSymbol value -> TyLitSymbol value;
+  Tc.TyLitChar value -> TyLitChar value};
+convertPred :: ConvertEnv -> Pred -> Either String Type;
+convertPred env predicate = case predicate of {
+  ClassPred tyCon arguments -> do {
+  kindArguments <- invisibleKindArgs env tyCon arguments Nothing;
+  argumentKinds <- visibleArgumentKinds env tyCon arguments Nothing;
+  converted <- zipWithM (convertTypeWithExpectedKind env) (map Just argumentKinds <> repeat Nothing) arguments;
+  pure (foldl TyApp (TyCon (classDictTypeName tyCon)) (kindArguments <> converted))};
+  EqPred left right -> TyEq <$> convertType env left <*> convertType env right;
+  IParamPred _ payload -> convertType env payload;
+  IrredPred constraint -> convertTypeWithExpectedKind env (Just (Tc.constraintKind (ceKinds env))) constraint;
+  QuantifiedPred variables antecedents consequent -> do {
+  let {
+  quantifiedEnv = withTyVars variables env};
+  binders <- mapM (tyVarBinder quantifiedEnv) variables;
+  convertedAntecedents <- mapM (convertPred quantifiedEnv) antecedents;
+  convertedConsequent <- convertPred quantifiedEnv consequent;
+  pure (foldr TyForAll (foldr (funType quantifiedEnv) convertedConsequent convertedAntecedents) binders)}};
+typeRep :: ConvertEnv -> TcType -> Either String Type;
+typeRep env ty = do {
+  kind <- typeKindInEnv env ty;
+  case runtimeRepFromKind kind of {
+  Left message -> Left (message <> " for " <> show ty);
+  Right runtimeRep -> case convertRep env runtimeRep of {
+  Left message -> Left (message <> " for " <> show ty);
+  Right converted -> Right converted}}};
+typeKindInEnv :: ConvertEnv -> TcType -> Either String TcType;
+typeKindInEnv env = Tc.typeKindInEnv (ceKinds env) (ceKindEnv env);
+evidenceArrows :: ConvertEnv -> TcType -> [Type] -> Type -> Type;
+evidenceArrows env body convertedPredicates convertedBody = go convertedPredicates where {
+  bodyRep = fromRight (liftedRepType env) (typeRep env body);
+  go [] = convertedBody;
+  go [predicate] = TyFun (evidenceRep env predicate) bodyRep predicate convertedBody;
+  go (predicate : rest) = funType env predicate (go rest)};
+funType :: ConvertEnv -> Type -> Type -> Type;
+funType env argument result = TyFun (evidenceRep env argument) (evidenceRep env result) argument result;
+evidenceRep :: ConvertEnv -> Type -> Type;
+evidenceRep env TyEq {} = equalityRep (cePrimPackage env);
+evidenceRep env _ = liftedRepType env;
+liftedRepType :: ConvertEnv -> Type;
+liftedRepType env = TyCon (liftedRepName (cePrimPackage env));
+tyVarBinder :: ConvertEnv -> TyVarId -> Either String Binder;
+tyVarBinder env tyVar = do {
+  kind <- convertKind (withTyVar tyVar env) (tvKind tyVar);
+  pure (Binder (tyVarName tyVar) kind)};
+tyVarName :: TyVarId -> Name;
+tyVarName tyVar = Name (tvName tyVar) SortTypeVariable (OriginLocal (tvUnique tyVar));
+tyVarType :: TyVarId -> Type;
+tyVarType tyVar = TyVar (tyVarName tyVar);
+tyConNameFc :: ConvertEnv -> TyCon -> Name;
+tyConNameFc env tyCon | Set.member (tyConKey tyCon) (ceClassTyCons env) = classDictTypeName tyCon | otherwise = Name (tyConName tyCon) sort (OriginTop (tyConPackageId tyCon) (tyConModuleName tyCon)) where {
+  sort | Set.member (tyConKey tyCon) (ceSynonymTyCons env) = SortSynonym | otherwise = namespaceSort (tyConNamespace tyCon);
+  namespaceSort ResolutionNamespaceTerm = SortDataConstructor;
+  namespaceSort ResolutionNamespaceType = SortTypeConstructor;
+  namespaceSort ResolutionNamespaceModule = SortTypeConstructor};
+extraKindVars :: ConvertEnv -> TyCon -> [TyVarId] -> Either String [TyVarId];
+extraKindVars env tyCon visible = do {
+  scheme <- kindScheme env tyCon;
+  let {
+  ForAll vars _ _ = scheme};
+  let {
+  seen = map tvUnique visible};
+  pure (filter (\tyVar -> tvUnique tyVar `notElem` seen) vars)};
+invisibleKindArgs :: ConvertEnv -> TyCon -> [TcType] -> Maybe TcType -> Either String [Type];
+invisibleKindArgs env tyCon arguments expectedKind = do {
+  variables <- extraKindVars env tyCon [];
+  mapM (kindVarToType env tyCon arguments expectedKind) variables};
+kindVarToType :: ConvertEnv -> TyCon -> [TcType] -> Maybe TcType -> TyVarId -> Either String Type;
+kindVarToType env tyCon arguments expectedKind tyVar = case Map.lookup (tvUnique tyVar) (ceTyVars env) of {
+  Just found | tvName found == tvName tyVar -> Right (tyVarType found);
+  _ -> do {
+  checkedKinds <- Tc.typeApplicationKinds (ceKinds env) (ceKindEnv env) tyCon arguments expectedKind;
+  let {
+  substitution = Tc.tcInvisibleKindSubstitution checkedKinds};
+  case Map.lookup (tvUnique tyVar) substitution of {
+  Just KConstraint -> Right (typeSynonym (cePrimPackage env));
+  Just argument -> convertRep env argument;
+  Nothing -> Left ("cannot infer the invisible kind argument " <> show (tvUnique tyVar) <> " for " <> T.unpack (tyConName tyCon) <> " with arguments " <> show arguments <> concatMap ("\n  " <>) (Tc.tcSkippedArguments checkedKinds))}}};
+visibleArgumentKinds :: ConvertEnv -> TyCon -> [TcType] -> Maybe TcType -> Either String [TcType];
+visibleArgumentKinds env tyCon arguments expectedKind = Tc.tcVisibleArgumentKinds <$> Tc.typeApplicationKinds (ceKinds env) (ceKindEnv env) tyCon arguments expectedKind;
+kindScheme :: ConvertEnv -> TyCon -> Either String TypeScheme;
+kindScheme env tyCon = case Map.lookup (tyConKey tyCon) (ceKindEnv env) of {
+  Just scheme -> Right scheme;
+  Nothing -> Left ("missing kind scheme for type constructor: " <> T.unpack (tyConName tyCon))}
+}
