@@ -6,6 +6,7 @@ module Prelude
   ( Bool (..),
     Char,
     Int,
+    Integer,
     Ordering (..),
     IO,
     String,
@@ -154,6 +155,7 @@ import GHC.Classes
 import GHC.Enum
 import GHC.List
 import GHC.Num
+import GHC.Num.Integer
 import GHC.Prim
 import GHC.Real
 import GHC.Show
