@@ -91,9 +91,15 @@ at the pinned revision. The larger choices:
 - **stm, async → drop.** A boot-built aihc can build sequentially.
 - **haskeline → drop** (in `build-depends` but never imported), **libffi →
   drop** (only the GRIN interpreter uses it).
-- **text, bytestring, containers, megaparsec, prettyprinter →
-  simplify.** These are used everywhere; vendor them and delete what aihc
-  does not use.
+- **text, bytestring, containers, prettyprinter → simplify.** These are
+  used everywhere; vendor them and delete what aihc does not use.
+- **megaparsec, mtl, parser-combinators, case-insensitive, scientific →
+  simplify by deletion only.** Do not rewrite these libraries to avoid a
+  type system feature. Delete the modules and functions that aihc does not
+  use, and keep the remaining code as it is upstream. aihc-parser defines a
+  `Stream` instance with associated types, and the fc and grin parsers of
+  aihc use the `MonadParsec` instance of `ReaderT`. So aihc also compiles
+  unmodified only when megaparsec keeps its classes.
 
 Changes to aihc itself (dropping dependencies, replacing the Custom setup)
 are made in `vendor/aihc*` and should also go upstream where they make sense,
@@ -188,10 +194,41 @@ resolved by their return type alone: `pure` and `>>=` in a `do` block
 over `StateT`, `fromInteger` on a literal, `mempty`, `minBound` and
 `read`. No run-time rule can select these dictionaries. So eval needs
 dictionary-passing desugaring, and that needs type inference. The
-typechecker is on the path to M6. The extension set is modest:
-`OverloadedStrings`, `BangPatterns`, `PatternSynonyms`, `LambdaCase`,
-some `RankNTypes` and `TypeApplications`, almost no type families and
-no GADT declarations.
+typechecker is on the path to M6.
+
+### Type system features
+
+The rule is: keep the library code, and support the features it uses.
+Deletion of unused code is permitted. A rewrite of a library to avoid a
+feature is not. megaparsec sets the feature set. The examples come
+from megaparsec 9.8.3, the current version on Hackage:
+
+| Feature | Example in the target |
+| --- | --- |
+| Multi-parameter classes with functional dependencies | `class MonadParsec e s m \| m -> e s`, the mtl classes |
+| Associated type synonyms | `Token s` and `Tokens s` in `Stream`, `Rep a` in `Generic` |
+| Equality constraints, also as given constraints | `newline :: (MonadParsec e s m, Token s ~ Char) => m (Token s)` |
+| Rank-N types in signatures and constructor fields | `newtype ParsecT e s m a = ParsecT { unParser :: forall b. ... }`, `runST` |
+| `$` with a polymorphic argument | `ParsecT $ \s cok cerr eok eerr -> ...` |
+| Class constraints on type family applications | `deriving instance (Show (Token s), Show e) => Show (ParseError s e)` |
+| Flexible and undecidable instances | `instance (Stream s, MonadState st m) => MonadState st (ParsecT e s m)` |
+| Default signatures | `default rnf :: (Generic a, GNFData (Rep a)) => a -> ()` |
+| Scoped type variables, type applications | `Proxy :: Proxy s` in `Stream` |
+| Deriving `Eq`, `Ord`, `Show`, `Enum`, `Bounded`, `Functor`, `Generic`, `NFData`, `Data`, `Typeable` | `ParseError`, `SourcePos`, the aihc syntax trees |
+
+The source syntax also uses `OverloadedStrings`, `BangPatterns`,
+`PatternSynonyms`, `LambdaCase`, `ViewPatterns` and `TupleSections`.
+"Undecidable" instances only turn off a termination check, so they cost
+nothing.
+
+These features are not in the target, and the typechecker does not
+support them: GADTs, data families, closed type families, `DataKinds`,
+`PolyKinds` and injectivity annotations. Before the typechecker design
+is final, vendor megaparsec and its dependencies, and count the
+extensions and constructs over the whole tree. Many packages use
+`GHC2021`, which turns on extensions without a pragma. A search for
+`LANGUAGE` pragmas does not find these uses. Thus the count must use
+the `.cabal` settings, or a check with GHC with a reduced extension set.
 
 ### Core
 
@@ -219,9 +256,21 @@ in this order, but the evaluator steps (1, 2) and the typechecker step
    builtins. The tree uses mutable references and exceptions in many
    places, so these are not optional. Add a name to `vendor/base` when
    an eval test needs it.
-3. **Typechecker.** Hindley-Milner with classes, superclasses,
-   defaulting and `deriving` for `Eq`, `Ord`, `Show`, `Enum`, `Bounded`
-   and `NFData`. Its output is Core with explicit dictionaries, so it
+3. **Typechecker.** A constraint-based typechecker, a reduced form of
+   OutsideIn(X) as in GHC, for the features in "Type system features".
+   It generates wanted constraints and solves them against given
+   constraints from signatures, instance contexts and class contexts.
+   The solver handles class constraints, equalities and type family
+   reduction. It improves types with functional dependencies. It
+   uses rigid type variables for signatures and rank-N fields, and it
+   checks expressions against their signatures. A special rule for `$`
+   lets a polymorphic argument through, as in older versions of GHC. It
+   also handles superclasses, defaulting and the `deriving` clauses of
+   the table. Design the solver for all of these features from the
+   start. A Hindley-Milner checker with type families added later
+   costs more. The vendored `aihc-tc` (`aihc-tc/src/Aihc/Tc/Solve/`)
+   solves the same problems and is a reference for the design. The
+   output of the typechecker is Core with explicit dictionaries, so it
    plugs into the evaluator of step 1 without a change. M5 counts a
    module as typechecked when aihc-boot accepts it. A wrong dictionary
    shows up as an eval failure. Add an oracle on the vendored `aihc-tc`,
@@ -246,9 +295,10 @@ Two rules help at every step. First, keep the "not supported yet" error
 with a position in the desugarer and the typechecker, so the tracker
 always shows the next construct to implement. Second, prune `aihc`
 itself. `Read`, `Data` and `Generic` deriving clauses appear on about
-one hundred types each. Delete the clauses that no code uses. `Generic`
-instances need type families, and this is the one place that would
-force type families into the typechecker.
+one hundred types each. Delete the clauses that no code uses. The
+typechecker supports associated types, so `deriving Generic` is not
+expensive: the boot `GHC.Generics` has `Rep` without metadata, and a
+derived instance only gives `Rep`, `from` and `to`.
 
 ### The boot base and the core libraries of aihc
 
