@@ -924,6 +924,14 @@ static void pr_exp(StrBuf *out, const Expr *e)
         break;
     case EXPR_LAMBDA:
         sb_puts(out, "\\");
+        if (e->pats.len > 0) {
+            /* `\!x` and `\~x` would lex as one operator. */
+            const Pat *first = e->pats.items[0];
+            if (first->kind == PAT_BANG || first->kind == PAT_LAZY
+                || (first->kind == PAT_LIT && first->negative)) {
+                sb_puts(out, " ");
+            }
+        }
         for (i = 0; i < e->pats.len; i++) {
             pr_pat(out, e->pats.items[i]);
             sb_puts(out, " ");
@@ -949,6 +957,19 @@ static void pr_exp(StrBuf *out, const Expr *e)
         sb_puts(out, " else ");
         pr_exp(out, e->c);
         break;
+    case EXPR_MULTI_IF: {
+        size_t i;
+        sb_puts(out, "if {");
+        for (i = 0; i < e->guards.len; i++) {
+            const GuardedRhs *g = e->guards.items[i];
+            sb_puts(out, " | ");
+            pr_stmts(out, &g->guards, ", ");
+            sb_puts(out, " -> ");
+            pr_exp(out, g->body);
+        }
+        sb_puts(out, " }");
+        break;
+    }
     case EXPR_CASE:
         sb_puts(out, "case ");
         pr_exp(out, e->a);

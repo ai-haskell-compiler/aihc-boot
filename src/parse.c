@@ -309,6 +309,25 @@ int p_block(Parser *p, ItemFn item, void *env, Vec *items)
     return close_block(p, explicit);
 }
 
+/* A block of items without `;` between them, as the alternatives of a
+ * multi-way if: each item starts with `|`. */
+int p_guard_block(Parser *p, ItemFn item, void *env, Vec *items)
+{
+    int explicit = 0;
+    vec_init(items);
+    if (open_block(p, &explicit) != 0) {
+        return -1;
+    }
+    while (!at_close_block(p, explicit) && p_at_op(p, OP_BAR)) {
+        void *x = item(p, env);
+        if (x == NULL) {
+            return -1;
+        }
+        vec_push(items, x);
+    }
+    return close_block(p, explicit);
+}
+
 /* --- Names ------------------------------------------------------------- */
 
 static char *modid(Parser *p)

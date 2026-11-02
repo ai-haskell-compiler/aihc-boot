@@ -738,10 +738,30 @@ static char *lex_file(int argc, char **argv)
 
 /* --- run and core ------------------------------------------------------- */
 
-/* The program for a single-module file: the boot `base` and its
- * dependencies as the resolver loads them, plus the file as the module
- * of a package named "main". Fills *packages with the Package * list the
- * desugarer takes. */
+/* The package that a program runs against: PKG for a file under
+ * tests/eval/PKG/ when PKG is vendored, and the boot `base` otherwise. */
+static const char *eval_package(const char *file, const StrMap *vendored)
+{
+    const char *prefix = "tests/eval/";
+    const char *rest;
+    const char *slash;
+    char *name;
+    if (!str_starts_with(file, prefix)) {
+        return "base";
+    }
+    rest = file + strlen(prefix);
+    slash = strchr(rest, '/');
+    if (slash == NULL) {
+        return "base";
+    }
+    name = xstrndup(rest, (size_t)(slash - rest));
+    return strmap_has(vendored, name) ? name : "base";
+}
+
+/* The program for a single-module file: the package it runs against
+ * (see eval_package) and its dependencies as the resolver loads them,
+ * plus the file as the module of a package named "main". Fills
+ * *packages with the Package * list the desugarer takes. */
 static char *program_for_file(const char *file, Program **out, Vec *packages)
 {
     StrMap vendored = vendored_packages();
@@ -754,7 +774,7 @@ static char *program_for_file(const char *file, Program **out, Vec *packages)
     SourceModule *source;
     Report report;
     Module *module;
-    char *e = package_order("base", &vendored, &order);
+    char *e = package_order(eval_package(file, &vendored), &vendored, &order);
     if (e != NULL) {
         return e;
     }

@@ -37,6 +37,7 @@ import GHC.Base
 import GHC.Classes
 import GHC.List (zipWith)
 import GHC.Num
+import GHC.Prim (seq)
 import GHC.Types
 
 infixr 1 >=>, <=<

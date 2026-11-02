@@ -135,3 +135,19 @@ instance (Ord a, Ord b, Ord c) => Ord (a, b, c) where
       EQ -> compare c f
       other -> other
     other -> other
+
+instance (Eq a, Eq b, Eq c, Eq d) => Eq (a, b, c, d) where
+  (a, b, c, d) == (e, f, g, h) = a == e && b == f && c == g && d == h
+
+instance (Ord a, Ord b, Ord c, Ord d) => Ord (a, b, c, d) where
+  compare (a, b, c, d) (e, f, g, h) = case compare a e of
+    EQ -> compare (b, c, d) (f, g, h)
+    other -> other
+
+instance (Eq a, Eq b, Eq c, Eq d, Eq e) => Eq (a, b, c, d, e) where
+  (a, b, c, d, e) == (f, g, h, i, j) = a == f && b == g && c == h && d == i && e == j
+
+instance (Ord a, Ord b, Ord c, Ord d, Ord e) => Ord (a, b, c, d, e) where
+  compare (a, b, c, d, e) (f, g, h, i, j) = case compare a f of
+    EQ -> compare (b, c, d, e) (g, h, i, j)
+    other -> other

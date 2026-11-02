@@ -690,6 +690,313 @@ static Obj *p_int_show(Obj **a)
     return make_string(buf);
 }
 
+/* --- Bits and unsigned words ---------------------------------------------- */
+
+/* The bits of an Int as an unsigned long. Shifts and the unsigned
+ * operations work on these, so they do not overflow. */
+static unsigned long bits_of(const Obj *o)
+{
+    return W(o)[0].u;
+}
+
+static Obj *make_bits(unsigned long u)
+{
+    return make_int(u <= (unsigned long)LONG_MAX ? (long)u : -(long)(ULONG_MAX - u) - 1);
+}
+
+static Obj *p_int_and(Obj **a) { return make_bits(bits_of(a[0]) & bits_of(a[1])); }
+static Obj *p_int_or(Obj **a) { return make_bits(bits_of(a[0]) | bits_of(a[1])); }
+static Obj *p_int_xor(Obj **a) { return make_bits(bits_of(a[0]) ^ bits_of(a[1])); }
+
+static Obj *p_int_shl(Obj **a)
+{
+    long n = int_of(a[1]);
+    if (n < 0 || (unsigned long)n >= sizeof(long) * CHAR_BIT) {
+        return make_int(0);
+    }
+    return make_bits(bits_of(a[0]) << n);
+}
+
+/* Logical shift right: zeros come in. */
+static Obj *p_int_shrl(Obj **a)
+{
+    long n = int_of(a[1]);
+    if (n < 0 || (unsigned long)n >= sizeof(long) * CHAR_BIT) {
+        return make_int(0);
+    }
+    return make_bits(bits_of(a[0]) >> n);
+}
+
+/* Arithmetic shift right: copies of the sign bit come in. */
+static Obj *p_int_shra(Obj **a)
+{
+    long x = int_of(a[0]);
+    long n = int_of(a[1]);
+    unsigned long u = bits_of(a[0]);
+    unsigned long width = sizeof(long) * CHAR_BIT;
+    if (n < 0 || (unsigned long)n >= width) {
+        return make_int(x < 0 ? -1 : 0);
+    }
+    if (n == 0) {
+        return make_int(x);
+    }
+    u >>= n;
+    if (x < 0) {
+        u |= ~0UL << (width - (unsigned long)n);
+    }
+    return make_bits(u);
+}
+
+static Obj *p_int_popcount(Obj **a)
+{
+    unsigned long u = bits_of(a[0]);
+    long n = 0;
+    while (u != 0) {
+        n += (long)(u & 1);
+        u >>= 1;
+    }
+    return make_int(n);
+}
+
+static Obj *p_int_clz(Obj **a)
+{
+    unsigned long u = bits_of(a[0]);
+    unsigned long width = sizeof(long) * CHAR_BIT;
+    long n = 0;
+    while (n < (long)width && (u & (1UL << (width - 1 - (unsigned long)n))) == 0) {
+        n++;
+    }
+    return make_int(n);
+}
+
+static Obj *p_int_ctz(Obj **a)
+{
+    unsigned long u = bits_of(a[0]);
+    unsigned long width = sizeof(long) * CHAR_BIT;
+    long n = 0;
+    while (n < (long)width && (u & (1UL << (unsigned long)n)) == 0) {
+        n++;
+    }
+    return make_int(n);
+}
+
+static Obj *p_word_lt(Obj **a) { return make_bool(bits_of(a[0]) < bits_of(a[1])); }
+static Obj *p_word_le(Obj **a) { return make_bool(bits_of(a[0]) <= bits_of(a[1])); }
+static Obj *p_word_gt(Obj **a) { return make_bool(bits_of(a[0]) > bits_of(a[1])); }
+static Obj *p_word_ge(Obj **a) { return make_bool(bits_of(a[0]) >= bits_of(a[1])); }
+
+static Obj *p_word_quot(Obj **a)
+{
+    if (bits_of(a[1]) == 0) {
+        runtime_error("divide by zero");
+    }
+    return make_bits(bits_of(a[0]) / bits_of(a[1]));
+}
+
+static Obj *p_word_rem(Obj **a)
+{
+    if (bits_of(a[1]) == 0) {
+        runtime_error("divide by zero");
+    }
+    return make_bits(bits_of(a[0]) % bits_of(a[1]));
+}
+
+static Obj *p_word_show(Obj **a)
+{
+    char buf[32];
+    sprintf(buf, "%lu", bits_of(a[0]));
+    return make_string(buf);
+}
+
+/* --- Memory --------------------------------------------------------------- */
+
+/* A Ptr is an Int that holds a C address. Memory from `malloc` is never
+ * freed: aihc-boot is a short-lived process. */
+static unsigned char *addr_of(const Obj *base, const Obj *off)
+{
+    return (unsigned char *)(W(base)[0].u + W(off)[0].u);
+}
+
+static Obj *p_malloc(Obj **a)
+{
+    long n = int_of(a[0]);
+    void *p = calloc(n > 0 ? (size_t)n : 1, 1);
+    if (p == NULL) {
+        runtime_error("out of memory");
+    }
+    return io_result(make_bits((unsigned long)p));
+}
+
+static Obj *p_peek8(Obj **a)
+{
+    return io_result(make_int(*addr_of(a[0], a[1])));
+}
+
+static Obj *p_peek16(Obj **a)
+{
+    unsigned short v;
+    memcpy(&v, addr_of(a[0], a[1]), sizeof v);
+    return io_result(make_int(v));
+}
+
+static Obj *p_peek32(Obj **a)
+{
+    unsigned long v = 0;
+    unsigned char *p = addr_of(a[0], a[1]);
+    unsigned long i;
+    /* Little-endian or big-endian as the host: assemble with memcpy of
+     * a 32-bit type when there is one. */
+    if (sizeof(unsigned int) == 4) {
+        unsigned int w;
+        memcpy(&w, p, 4);
+        v = w;
+    } else {
+        for (i = 0; i < 4; i++) {
+            v |= (unsigned long)p[i] << (8 * i);
+        }
+    }
+    return io_result(make_bits(v));
+}
+
+static Obj *p_peek64(Obj **a)
+{
+    unsigned long v;
+    memcpy(&v, addr_of(a[0], a[1]), sizeof v);
+    return io_result(make_bits(v));
+}
+
+static Obj *p_poke8(Obj **a)
+{
+    *addr_of(a[0], a[1]) = (unsigned char)(bits_of(a[2]) & 0xFF);
+    return io_result(nullary(prog->con_unit));
+}
+
+static Obj *p_poke16(Obj **a)
+{
+    unsigned short v = (unsigned short)(bits_of(a[2]) & 0xFFFF);
+    memcpy(addr_of(a[0], a[1]), &v, sizeof v);
+    return io_result(nullary(prog->con_unit));
+}
+
+static Obj *p_poke32(Obj **a)
+{
+    unsigned char *p = addr_of(a[0], a[1]);
+    unsigned long v = bits_of(a[2]);
+    unsigned long i;
+    if (sizeof(unsigned int) == 4) {
+        unsigned int w = (unsigned int)(v & 0xFFFFFFFFUL);
+        memcpy(p, &w, 4);
+    } else {
+        for (i = 0; i < 4; i++) {
+            p[i] = (unsigned char)((v >> (8 * i)) & 0xFF);
+        }
+    }
+    return io_result(nullary(prog->con_unit));
+}
+
+static Obj *p_poke64(Obj **a)
+{
+    unsigned long v = bits_of(a[2]);
+    memcpy(addr_of(a[0], a[1]), &v, sizeof v);
+    return io_result(nullary(prog->con_unit));
+}
+
+static Obj *p_memcpy(Obj **a)
+{
+    long n = int_of(a[2]);
+    if (n > 0) {
+        memcpy((void *)W(a[0])[0].u, (const void *)W(a[1])[0].u, (size_t)n);
+    }
+    return io_result(nullary(prog->con_unit));
+}
+
+static Obj *p_memmove(Obj **a)
+{
+    long n = int_of(a[2]);
+    if (n > 0) {
+        memmove((void *)W(a[0])[0].u, (const void *)W(a[1])[0].u, (size_t)n);
+    }
+    return io_result(nullary(prog->con_unit));
+}
+
+static Obj *p_memset(Obj **a)
+{
+    long n = int_of(a[2]);
+    if (n > 0) {
+        memset((void *)W(a[0])[0].u, (int)(bits_of(a[1]) & 0xFF), (size_t)n);
+    }
+    return io_result(nullary(prog->con_unit));
+}
+
+static Obj *p_memcmp(Obj **a)
+{
+    long n = int_of(a[2]);
+    int r = 0;
+    if (n > 0) {
+        r = memcmp((const void *)W(a[0])[0].u, (const void *)W(a[1])[0].u, (size_t)n);
+    }
+    return io_result(make_int(r < 0 ? -1 : r > 0 ? 1 : 0));
+}
+
+/* --- Files ---------------------------------------------------------------- */
+
+/* `fileSize path`: the size of a file in bytes, or -1 when it cannot be
+ * read. */
+static Obj *p_file_size(Obj **a)
+{
+    char *path = force_string(a[0]);
+    FILE *f = fopen(path, "rb");
+    long n = 0;
+    int c;
+    free(path);
+    if (f == NULL) {
+        return io_result(make_int(-1));
+    }
+    while ((c = getc(f)) != EOF) {
+        n++;
+    }
+    fclose(f);
+    return io_result(make_int(n));
+}
+
+/* `readFileInto path addr n`: read the first n bytes of a file to
+ * memory. Returns the number of bytes read, or -1. */
+static Obj *p_read_file_into(Obj **a)
+{
+    /* Read the numbers first: forcing the path may move the arguments. */
+    unsigned long addr = W(a[1])[0].u;
+    long n = int_of(a[2]);
+    char *path = force_string(a[0]);
+    FILE *f = fopen(path, "rb");
+    size_t got;
+    free(path);
+    if (f == NULL) {
+        return io_result(make_int(-1));
+    }
+    got = n > 0 ? fread((void *)addr, 1, (size_t)n, f) : 0;
+    fclose(f);
+    return io_result(make_int((long)got));
+}
+
+/* `writeFileFrom path addr n append`: write n bytes from memory to a
+ * file. Returns 0, or -1 when the file cannot be written. */
+static Obj *p_write_file_from(Obj **a)
+{
+    unsigned long addr = W(a[1])[0].u;
+    long n = int_of(a[2]);
+    int append = int_of(a[3]) != 0;
+    char *path = force_string(a[0]);
+    FILE *f = fopen(path, append ? "ab" : "wb");
+    int ok;
+    free(path);
+    if (f == NULL) {
+        return io_result(make_int(-1));
+    }
+    ok = n <= 0 || fwrite((const void *)addr, 1, (size_t)n, f) == (size_t)n;
+    ok = fclose(f) == 0 && ok;
+    return io_result(make_int(ok ? 0 : -1));
+}
+
 /* --- Integer ------------------------------------------------------------ */
 
 /* An Integer is an INT when it fits in a long, and a BIG when it does
@@ -1281,6 +1588,38 @@ static const PrimInfo prims[] = {
     {"flush", 1, 0, p_flush},
     {"whnf", 1, 1, p_whnf},
     {"unsafeCoerce", 1, 0, p_unsafe_coerce},
+    {"intAnd", 2, 3, p_int_and},
+    {"intOr", 2, 3, p_int_or},
+    {"intXor", 2, 3, p_int_xor},
+    {"intShl", 2, 3, p_int_shl},
+    {"intShrl", 2, 3, p_int_shrl},
+    {"intShra", 2, 3, p_int_shra},
+    {"intPopCount", 1, 1, p_int_popcount},
+    {"intClz", 1, 1, p_int_clz},
+    {"intCtz", 1, 1, p_int_ctz},
+    {"wordLt", 2, 3, p_word_lt},
+    {"wordLe", 2, 3, p_word_le},
+    {"wordGt", 2, 3, p_word_gt},
+    {"wordGe", 2, 3, p_word_ge},
+    {"wordQuot", 2, 3, p_word_quot},
+    {"wordRem", 2, 3, p_word_rem},
+    {"wordShow", 1, 1, p_word_show},
+    {"malloc", 2, 1, p_malloc},
+    {"peek8", 3, 3, p_peek8},
+    {"peek16", 3, 3, p_peek16},
+    {"peek32", 3, 3, p_peek32},
+    {"peek64", 3, 3, p_peek64},
+    {"poke8", 4, 7, p_poke8},
+    {"poke16", 4, 7, p_poke16},
+    {"poke32", 4, 7, p_poke32},
+    {"poke64", 4, 7, p_poke64},
+    {"memcpy", 4, 7, p_memcpy},
+    {"memmove", 4, 7, p_memmove},
+    {"memset", 4, 7, p_memset},
+    {"memcmp", 4, 7, p_memcmp},
+    {"fileSize", 2, 0, p_file_size},
+    {"readFileInto", 4, 6, p_read_file_into},
+    {"writeFileFrom", 5, 14, p_write_file_from},
     {NULL, 0, 0, NULL}
 };
 

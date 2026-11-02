@@ -2013,6 +2013,8 @@ static Core *ds_expr_inner(Ds *ds, const Expr *x)
     }
     case EXPR_CASE:
         return ds_case(ds, x);
+    case EXPR_MULTI_IF:
+        return ds_guard_alts(ds, &x->guards, fail_error("multi-way if: no alternative matched"));
     case EXPR_DO:
         if (x->stmts.len == 0) {
             fail_at(ds, xstrdup("an empty do block"));

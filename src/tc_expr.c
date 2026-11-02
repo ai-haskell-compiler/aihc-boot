@@ -1159,6 +1159,11 @@ void tc_expr(Tc *tc, const Expr *e, Ty *expected)
         tc_expr(tc, e->b, expected);
         tc_expr(tc, e->c, expected);
         return;
+    case EXPR_MULTI_IF:
+        for (i = 0; i < e->guards.len; i++) {
+            tc_guards(tc, (const GuardedRhs *)e->guards.items[i], expected);
+        }
+        return;
     case EXPR_CASE: {
         Ty *t = ty_meta(tc);
         tc_expr(tc, e->a, t);
@@ -1437,6 +1442,13 @@ static void fv_expr(const Expr *e, Vec *out)
         fv_stmts(&e->stmts, out);
         fv_expr(e->a, out);
         break;
+    case EXPR_MULTI_IF:
+        for (i = 0; i < e->guards.len; i++) {
+            const GuardedRhs *g = (const GuardedRhs *)e->guards.items[i];
+            fv_stmts(&g->guards, out);
+            fv_expr(g->body, out);
+        }
+        break;
     case EXPR_TUPLE:
     case EXPR_TUPLE_SECTION:
     case EXPR_LIST:
@@ -1612,8 +1624,11 @@ void tc_check_binding(Tc *tc, const Vec *clauses, Ty *sigma, const char *name)
     }
 }
 
-/* The binder's current type: a local, or a top-level value. */
-static void set_binder(Tc *tc, const char *name, Ty *type, MonoGroup *mono, int top)
+/* The binder's current type: a local, or a top-level value. A binder
+ * of a group under inference has the group as mono; generalize sets
+ * the final type of such a binder. */
+static void set_binder_gen(Tc *tc, const char *name, Ty *type, MonoGroup *mono, int top,
+                           int generalize)
 {
     if (top) {
         TcVal *v = (TcVal *)strmap_get(&tc->values, tkey(tc->module, name));
@@ -1622,7 +1637,7 @@ static void set_binder(Tc *tc, const char *name, Ty *type, MonoGroup *mono, int 
             strmap_put(&tc->values, tkey(tc->module, name), v);
         }
         v->type = type;
-        v->mono = mono;
+        v->mono = generalize ? NULL : mono;
         return;
     }
     {
@@ -1632,8 +1647,13 @@ static void set_binder(Tc *tc, const char *name, Ty *type, MonoGroup *mono, int 
             l->mono = NULL;
             return;
         }
-        local_push(tc, name, type, mono);
+        local_push(tc, name, type, generalize ? NULL : mono);
     }
+}
+
+static void set_binder(Tc *tc, const char *name, Ty *type, MonoGroup *mono, int top)
+{
+    set_binder_gen(tc, name, type, mono, top, 0);
 }
 
 /* Infer one strongly connected component of bindings without
@@ -1865,11 +1885,11 @@ static void infer_scc(Tc *tc, Binding **scc, size_t n, int top)
             for (j = 0; j < b->vars.len; j++) {
                 Vec none;
                 vec_init(&none);
-                set_binder(tc, (const char *)b->vars.items[j],
-                           ty_forall(&vars, &none, pat_monos[i][j]), mg, top);
+                set_binder_gen(tc, (const char *)b->vars.items[j],
+                               ty_forall(&vars, &none, pat_monos[i][j]), mg, top, 1);
             }
         } else {
-            set_binder(tc, b->name, ty_forall(&vars, &preds, monos[i]), mg, top);
+            set_binder_gen(tc, b->name, ty_forall(&vars, &preds, monos[i]), mg, top, 1);
             if (dicts.len > 0) {
                 TcNote *note = dnote((const Decl *)b->clauses.items[0]);
                 for (j = 0; j < dicts.len; j++) {

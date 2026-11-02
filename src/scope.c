@@ -744,6 +744,24 @@ static Scope *module_exports(const Program *p, const char *package,
                     return NULL;
                 }
             }
+        } else if (export->kind == EXPORT_MODULE) {
+            /* `module M`: the names in scope both unqualified and with
+             * the qualifier M, as the same entity. */
+            size_t j;
+            const Scope *q = scope_qualifier(scope, export->module);
+            if (q == NULL) {
+                continue;
+            }
+            for (j = 0; j < q->terms.len; j++) {
+                if (strmap_get(&scope->terms, q->terms.keys[j]) == q->terms.vals[j]) {
+                    strmap_put(&out->terms, q->terms.keys[j], q->terms.vals[j]);
+                }
+            }
+            for (j = 0; j < q->types.len; j++) {
+                if (strmap_get(&scope->types, q->types.keys[j]) == q->types.vals[j]) {
+                    strmap_put(&out->types, q->types.keys[j], q->types.vals[j]);
+                }
+            }
         } else {
             *err = unsupported("this export item", &module->pos);
             return NULL;

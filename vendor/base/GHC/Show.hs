@@ -155,3 +155,11 @@ asciiTab =
     "CAN", "EM", "SUB", "ESC", "FS", "GS", "RS", "US",
     "SP"
   ]
+
+instance (Show a, Show b, Show c, Show d) => Show (a, b, c, d) where
+  showsPrec _ (a, b, c, d) s =
+    '(' : shows a (',' : shows b (',' : shows c (',' : shows d (')' : s))))
+
+instance (Show a, Show b, Show c, Show d, Show e) => Show (a, b, c, d, e) where
+  showsPrec _ (a, b, c, d, e) s =
+    '(' : shows a (',' : shows b (',' : shows c (',' : shows d (',' : shows e (')' : s)))))

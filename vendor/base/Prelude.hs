@@ -3,6 +3,7 @@ module Prelude
   ( Bool (..),
     Char,
     Int,
+    Word,
     Integer,
     Ordering (..),
     IO,
@@ -112,6 +113,10 @@ module Prelude
     getLine,
     getContents,
     interact,
+    FilePath,
+    readFile,
+    writeFile,
+    appendFile,
   )
 where
 

@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 -- | The 'IsString' class: a string literal with OverloadedStrings
 -- desugars to 'fromString'.
@@ -14,9 +14,10 @@ where
 
 import Data.List (lines, unlines, unwords, words)
 import GHC.Base
+import GHC.Types
 
 class IsString a where
   fromString :: String -> a
 
-instance (a ~ Char) => IsString [a] where
+instance IsString [Char] where
   fromString xs = xs

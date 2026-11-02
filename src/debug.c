@@ -1261,6 +1261,9 @@ static void d_expr(Dbg *d, const void *x)
     case EXPR_LET:
         d_tuple2(d, "Let", v_decls, &e->decls, d_expr, e->a);
         break;
+    case EXPR_MULTI_IF:
+        d_tuple1(d, "MultiWayIf", v_guarded_rhss, &e->guards);
+        break;
     case EXPR_IF:
         d_open(d, "If", '(');
         d_item(d);

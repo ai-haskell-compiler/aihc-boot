@@ -19,31 +19,54 @@ library
   exposed-modules:
     Control.Exception
     Control.Monad
+    Control.Monad.ST
+    Control.Monad.ST.Unsafe
+    Data.Bits
     Data.Char
     Data.Either
     Data.Foldable
     Data.Functor
+    Data.Int
     Data.List
+    Data.List.NonEmpty
     Data.Maybe
+    Data.Semigroup
     Data.String
     Data.Traversable
     Data.Tuple
     Data.Typeable
     Data.Typeable.Internal
+    Data.Word
+    Foreign
+    Foreign.C.Types
+    Foreign.ForeignPtr
+    Foreign.ForeignPtr.Unsafe
+    Foreign.Marshal.Alloc
+    Foreign.Marshal.Utils
+    Foreign.Ptr
+    Foreign.Storable
     GHC.Base
+    GHC.Bits
     GHC.Classes
     GHC.Enum
     GHC.Err
     GHC.Exception
     GHC.Exception.Type
+    GHC.ForeignPtr
     GHC.Generics
+    GHC.Int
     GHC.List
     GHC.Maybe
     GHC.Num
     GHC.Num.Integer
     GHC.Prim
+    GHC.Ptr
     GHC.Real
+    GHC.ST
     GHC.Show
+    GHC.Stack.Types
     GHC.Types
+    GHC.Word
     Prelude
     System.IO
+    System.IO.Unsafe

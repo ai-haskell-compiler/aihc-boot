@@ -34,6 +34,38 @@ module GHC.Prim
     primPutChar,
     primGetChar,
     primFlush,
+    primIntAnd,
+    primIntOr,
+    primIntXor,
+    primIntShl,
+    primIntShrl,
+    primIntShra,
+    primIntPopCount,
+    primIntClz,
+    primIntCtz,
+    primWordLt,
+    primWordLe,
+    primWordGt,
+    primWordGe,
+    primWordQuot,
+    primWordRem,
+    primWordShow,
+    primMalloc,
+    primPeek8,
+    primPeek16,
+    primPeek32,
+    primPeek64,
+    primPoke8,
+    primPoke16,
+    primPoke32,
+    primPoke64,
+    primMemcpy,
+    primMemmove,
+    primMemset,
+    primMemcmp,
+    primFileSize,
+    primReadFileInto,
+    primWriteFileFrom,
   )
 where
 
@@ -112,3 +144,76 @@ foreign import prim "putChar" primPutChar :: Char -> IO ()
 foreign import prim "getChar" primGetChar :: IO Int
 
 foreign import prim "flush" primFlush :: IO ()
+
+-- | Bit operations on Int. The shifts give 0 (or -1) for counts of the
+-- word size or more.
+
+foreign import prim "intAnd" primIntAnd :: Int -> Int -> Int
+
+foreign import prim "intOr" primIntOr :: Int -> Int -> Int
+
+foreign import prim "intXor" primIntXor :: Int -> Int -> Int
+
+foreign import prim "intShl" primIntShl :: Int -> Int -> Int
+
+foreign import prim "intShrl" primIntShrl :: Int -> Int -> Int
+
+foreign import prim "intShra" primIntShra :: Int -> Int -> Int
+
+foreign import prim "intPopCount" primIntPopCount :: Int -> Int
+
+foreign import prim "intClz" primIntClz :: Int -> Int
+
+foreign import prim "intCtz" primIntCtz :: Int -> Int
+
+-- | The unsigned operations on the bits of an Int.
+
+foreign import prim "wordLt" primWordLt :: Int -> Int -> Bool
+
+foreign import prim "wordLe" primWordLe :: Int -> Int -> Bool
+
+foreign import prim "wordGt" primWordGt :: Int -> Int -> Bool
+
+foreign import prim "wordGe" primWordGe :: Int -> Int -> Bool
+
+foreign import prim "wordQuot" primWordQuot :: Int -> Int -> Int
+
+foreign import prim "wordRem" primWordRem :: Int -> Int -> Int
+
+foreign import prim "wordShow" primWordShow :: Int -> [Char]
+
+-- | Memory. An address is an Int; the memory is never freed. The
+-- reads and writes take an address and an offset in bytes.
+
+foreign import prim "malloc" primMalloc :: Int -> IO Int
+
+foreign import prim "peek8" primPeek8 :: Int -> Int -> IO Int
+
+foreign import prim "peek16" primPeek16 :: Int -> Int -> IO Int
+
+foreign import prim "peek32" primPeek32 :: Int -> Int -> IO Int
+
+foreign import prim "peek64" primPeek64 :: Int -> Int -> IO Int
+
+foreign import prim "poke8" primPoke8 :: Int -> Int -> Int -> IO ()
+
+foreign import prim "poke16" primPoke16 :: Int -> Int -> Int -> IO ()
+
+foreign import prim "poke32" primPoke32 :: Int -> Int -> Int -> IO ()
+
+foreign import prim "poke64" primPoke64 :: Int -> Int -> Int -> IO ()
+
+foreign import prim "memcpy" primMemcpy :: Int -> Int -> Int -> IO ()
+
+foreign import prim "memmove" primMemmove :: Int -> Int -> Int -> IO ()
+
+foreign import prim "memset" primMemset :: Int -> Int -> Int -> IO ()
+
+foreign import prim "memcmp" primMemcmp :: Int -> Int -> Int -> IO Int
+
+-- | Files. The path is a String; the data is in memory at an address.
+foreign import prim "fileSize" primFileSize :: [Char] -> IO Int
+
+foreign import prim "readFileInto" primReadFileInto :: [Char] -> Int -> Int -> IO Int
+
+foreign import prim "writeFileFrom" primWriteFileFrom :: [Char] -> Int -> Int -> Int -> IO Int
