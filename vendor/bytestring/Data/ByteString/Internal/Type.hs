@@ -21,7 +21,6 @@ module Data.ByteString.Internal.Type (
     unpackChars,
     unpackAppendCharsLazy,
     unpackAppendCharsStrict,
-    unsafePackLenLiteral,
     empty,
     createFp,
     unsafeCreateFp,
@@ -68,13 +67,11 @@ import Data.String              (IsString(..))
 import Control.Exception        (assert, throw, Exception)
 import Data.Char                (ord)
 import Data.Word
-import GHC.Base (nullAddr#, unsafeChr)
-import GHC.Exts (Addr#)
+import GHC.Base (unsafeChr)
 import qualified System.IO.Unsafe as Unsafe
-import GHC.ForeignPtr           (ForeignPtr(ForeignPtr)
-                                , mallocPlainForeignPtrBytes)
+import Foreign.ForeignPtr       (newForeignPtr_)
+import GHC.ForeignPtr           (mallocPlainForeignPtrBytes)
 import GHC.ForeignPtr           (plusForeignPtr)
-import GHC.ForeignPtr           (ForeignPtrContents(FinalPtr))
 import GHC.ForeignPtr           (unsafeWithForeignPtr)
 
 peekFp :: Storable a => ForeignPtr a -> IO a
@@ -161,18 +158,6 @@ unsafePackLenChars len cs0 =
     go !_ []     = return ()
     go !p (c:cs) = pokeFp p (c2w c) >> go (p `plusForeignPtr` 1) cs
 
--- | See 'unsafePackLiteral'. This function is similar,
--- but takes an additional length argument rather then computing
--- it with @strlen@.
--- Therefore embedding @\'\\0\'@ characters is possible.
---
--- @since 0.11.2.0
-unsafePackLenLiteral :: Int -> Addr# -> ByteString
-unsafePackLenLiteral len addr# =
-
-  BS (ForeignPtr addr# FinalPtr) len
-{-# INLINE unsafePackLenLiteral #-}
-
 unpackChars :: ByteString -> [Char]
 unpackChars bs = unpackAppendCharsLazy bs []
 
@@ -194,8 +179,10 @@ unpackAppendCharsStrict (BS fp len) xs =
                            loop sentinal (p `plusPtr` (-1)) (w2c x:acc)
 
 -- | The 0 pointer. Used to indicate the empty Bytestring.
+-- The aihc-boot cut-down makes the null pointer with the lifted API.
 nullForeignPtr :: ForeignPtr Word8
-nullForeignPtr = ForeignPtr nullAddr# FinalPtr
+nullForeignPtr = Unsafe.unsafeDupablePerformIO (newForeignPtr_ nullPtr)
+{-# NOINLINE nullForeignPtr #-}
 
 -- | A way of creating ByteStrings outside the IO monad. The @Int@
 -- argument gives the final size of the ByteString.
