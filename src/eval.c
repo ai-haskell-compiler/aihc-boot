@@ -4,6 +4,7 @@
  * that holds its kind and its size in payload words. The kinds:
  *
  *   INT        i                 a machine integer
+ *   BIG        sign d0 .. dn     an Integer that does not fit in an INT
  *   CHAR       u                 a Unicode code point
  *   CON        con f1 .. fn      a constructor with its fields
  *   FUN        lam env           a closure of a CORE_LAM
@@ -27,6 +28,7 @@
  * evaluates anything, because both can move objects, and it registers
  * every pointer it keeps across such a call as a root.
  */
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,6 +50,7 @@ struct Obj {
 
 enum {
     O_INT,
+    O_BIG,
     O_CHAR,
     O_CON,
     O_FUN,
@@ -671,6 +674,453 @@ static Obj *p_int_show(Obj **a)
     return make_string(buf);
 }
 
+/* --- Integer ------------------------------------------------------------ */
+
+/* An Integer is an INT when it fits in a long, and a BIG when it does
+ * not. A BIG holds the sign (1 or -1) and the magnitude in limbs of 16
+ * bits, the least significant limb first, one limb in each word. C89
+ * makes an unsigned long at least 32 bits wide, so the product of two
+ * limbs fits in it. The arithmetic works on a Big: a copy of the value
+ * outside the heap. Speed matters little here, because almost every
+ * Integer in the vendored tree is small and takes the INT path. */
+
+#define LIMB_BITS 16
+#define LIMB_MASK 0xFFFFUL
+#define LONG_BITS (sizeof(long) * CHAR_BIT)
+/* The number of limbs that always fit in a long. */
+#define LONG_LIMBS ((unsigned long)(LONG_BITS / LIMB_BITS))
+
+typedef struct {
+    int neg;
+    unsigned long n; /* the number of limbs; 0 for zero */
+    unsigned long *d;
+} Big;
+
+static void big_alloc(Big *b, unsigned long n)
+{
+    b->neg = 0;
+    b->n = n;
+    b->d = (unsigned long *)xcalloc(n + 1, sizeof(unsigned long));
+}
+
+/* Remove the leading zero limbs. Zero has no sign. */
+static void big_trim(Big *b)
+{
+    while (b->n > 0 && b->d[b->n - 1] == 0) {
+        b->n--;
+    }
+    if (b->n == 0) {
+        b->neg = 0;
+    }
+}
+
+static void big_from_long(Big *b, long x)
+{
+    unsigned long u = x < 0 ? 0UL - (unsigned long)x : (unsigned long)x;
+    unsigned long i;
+    big_alloc(b, LONG_LIMBS + 1);
+    for (i = 0; i < b->n; i++) {
+        b->d[i] = u & LIMB_MASK;
+        u >>= LIMB_BITS;
+    }
+    b->neg = x < 0;
+    big_trim(b);
+}
+
+static void big_copy(const Big *a, Big *b)
+{
+    big_alloc(b, a->n);
+    memcpy(b->d, a->d, a->n * sizeof(unsigned long));
+    b->neg = a->neg;
+}
+
+/* The Big of an Integer object in weak head normal form. */
+static void big_of(const Obj *o, Big *b)
+{
+    unsigned long i;
+    if (KIND(o) == O_INT) {
+        big_from_long(b, int_of(o));
+        return;
+    }
+    big_alloc(b, SIZE(o) - 1);
+    b->neg = W(o)[0].i < 0;
+    for (i = 0; i < b->n; i++) {
+        b->d[i] = W(o)[1 + i].u;
+    }
+}
+
+/* The Integer object of a Big. It frees the limbs. */
+static Obj *big_obj(Big *b)
+{
+    Obj *o;
+    unsigned long i;
+    big_trim(b);
+    if (b->n <= LONG_LIMBS) {
+        unsigned long u = 0;
+        i = b->n;
+        while (i > 0) {
+            i--;
+            u = (u << LIMB_BITS) | b->d[i];
+        }
+        if (!b->neg && u <= (unsigned long)LONG_MAX) {
+            free(b->d);
+            return make_int((long)u);
+        }
+        if (b->neg && u <= (unsigned long)LONG_MAX + 1) {
+            free(b->d);
+            return make_int(u == (unsigned long)LONG_MAX + 1 ? LONG_MIN : -(long)u);
+        }
+    }
+    reserve(2 + b->n);
+    o = alloc(O_BIG, 1 + b->n);
+    W(o)[0].i = b->neg ? -1 : 1;
+    for (i = 0; i < b->n; i++) {
+        W(o)[1 + i].u = b->d[i];
+    }
+    free(b->d);
+    return o;
+}
+
+/* Compare the magnitudes. Leading zero limbs are allowed. */
+static int mag_cmp(const Big *a, const Big *b)
+{
+    unsigned long an = a->n;
+    unsigned long bn = b->n;
+    while (an > 0 && a->d[an - 1] == 0) {
+        an--;
+    }
+    while (bn > 0 && b->d[bn - 1] == 0) {
+        bn--;
+    }
+    if (an != bn) {
+        return an < bn ? -1 : 1;
+    }
+    while (an > 0) {
+        an--;
+        if (a->d[an] != b->d[an]) {
+            return a->d[an] < b->d[an] ? -1 : 1;
+        }
+    }
+    return 0;
+}
+
+static int big_cmp(const Big *a, const Big *b)
+{
+    int c;
+    if (a->neg != b->neg) {
+        return a->neg ? -1 : 1;
+    }
+    c = mag_cmp(a, b);
+    return a->neg ? -c : c;
+}
+
+/* r := |r| - |b|, with |r| >= |b|. */
+static void mag_sub_from(Big *r, const Big *b)
+{
+    unsigned long borrow = 0;
+    unsigned long i;
+    for (i = 0; i < r->n; i++) {
+        unsigned long x = r->d[i];
+        unsigned long y = (i < b->n ? b->d[i] : 0) + borrow;
+        if (x >= y) {
+            r->d[i] = x - y;
+            borrow = 0;
+        } else {
+            r->d[i] = x + (LIMB_MASK + 1) - y;
+            borrow = 1;
+        }
+    }
+}
+
+/* r := a + b, where b has the sign bneg. */
+static void big_add(const Big *a, const Big *b, int bneg, Big *r)
+{
+    if (a->neg == bneg) {
+        unsigned long n = a->n > b->n ? a->n : b->n;
+        unsigned long carry = 0;
+        unsigned long i;
+        big_alloc(r, n + 1);
+        for (i = 0; i < n; i++) {
+            unsigned long s = carry + (i < a->n ? a->d[i] : 0) + (i < b->n ? b->d[i] : 0);
+            r->d[i] = s & LIMB_MASK;
+            carry = s >> LIMB_BITS;
+        }
+        r->d[n] = carry;
+        r->neg = a->neg;
+    } else if (mag_cmp(a, b) >= 0) {
+        big_copy(a, r);
+        mag_sub_from(r, b);
+    } else {
+        big_copy(b, r);
+        mag_sub_from(r, a);
+        r->neg = bneg;
+    }
+    big_trim(r);
+}
+
+static void big_mul(const Big *a, const Big *b, Big *r)
+{
+    unsigned long i;
+    unsigned long j;
+    big_alloc(r, a->n + b->n);
+    for (i = 0; i < a->n; i++) {
+        unsigned long carry = 0;
+        for (j = 0; j < b->n; j++) {
+            unsigned long t = a->d[i] * b->d[j] + r->d[i + j] + carry;
+            r->d[i + j] = t & LIMB_MASK;
+            carry = t >> LIMB_BITS;
+        }
+        r->d[i + b->n] = carry;
+    }
+    r->neg = a->neg != b->neg;
+    big_trim(r);
+}
+
+/* q := |a| / |b| and r := |a| mod |b|, without signs. b is not zero. */
+static void mag_divmod(const Big *a, const Big *b, Big *q, Big *r)
+{
+    unsigned long i;
+    big_alloc(q, a->n);
+    if (b->n == 1) {
+        /* One limb: the remainder stays below 2^16, so a limb shifted
+         * into it stays below 2^32. */
+        unsigned long rem = 0;
+        unsigned long y = b->d[0];
+        i = a->n;
+        while (i > 0) {
+            i--;
+            rem = (rem << LIMB_BITS) | a->d[i];
+            q->d[i] = rem / y;
+            rem %= y;
+        }
+        big_alloc(r, 1);
+        r->d[0] = rem;
+    } else {
+        /* Long division, one bit at a time. */
+        big_alloc(r, b->n + 1);
+        i = a->n * LIMB_BITS;
+        while (i > 0) {
+            unsigned long carry;
+            unsigned long k;
+            i--;
+            carry = (a->d[i / LIMB_BITS] >> (i % LIMB_BITS)) & 1;
+            for (k = 0; k < r->n; k++) {
+                unsigned long t = (r->d[k] << 1) | carry;
+                r->d[k] = t & LIMB_MASK;
+                carry = t >> LIMB_BITS;
+            }
+            if (mag_cmp(r, b) >= 0) {
+                mag_sub_from(r, b);
+                q->d[i / LIMB_BITS] |= 1UL << (i % LIMB_BITS);
+            }
+        }
+    }
+    big_trim(q);
+    big_trim(r);
+}
+
+/* Divide a by b. The quotient rounds toward zero (quot and rem) or,
+ * when floored is set, toward negative infinity (div and mod). */
+static void big_divide(const Big *a, const Big *b, int floored, Big *q, Big *r)
+{
+    if (b->n == 0) {
+        runtime_error("divide by zero");
+    }
+    mag_divmod(a, b, q, r);
+    q->neg = q->n > 0 && a->neg != b->neg;
+    r->neg = r->n > 0 && a->neg;
+    if (floored && r->n > 0 && a->neg != b->neg) {
+        Big one;
+        Big t;
+        big_from_long(&one, 1);
+        big_add(q, &one, 1, &t);
+        free(q->d);
+        *q = t;
+        big_add(r, b, b->neg, &t);
+        free(r->d);
+        *r = t;
+        free(one.d);
+    }
+}
+
+/* The greatest common divisor, by Euclid's algorithm. */
+static void big_gcd(const Big *a, const Big *b, Big *r)
+{
+    Big x;
+    Big y;
+    big_copy(a, &x);
+    big_copy(b, &y);
+    while (y.n > 0) {
+        Big q;
+        Big m;
+        mag_divmod(&x, &y, &q, &m);
+        free(q.d);
+        free(x.d);
+        x = y;
+        y = m;
+    }
+    free(y.d);
+    x.neg = 0;
+    *r = x;
+}
+
+enum { I_ADD, I_SUB, I_MUL, I_QUOT, I_REM, I_DIV, I_MOD, I_GCD };
+
+/* A binary operation on two Integers in weak head normal form. */
+static Obj *integer_op(Obj **a, int op)
+{
+    Big x;
+    Big y;
+    Big q;
+    Big r;
+    if (KIND(a[0]) == O_INT && KIND(a[1]) == O_INT) {
+        /* The fast path, when the result fits in a long. */
+        long i = int_of(a[0]);
+        long j = int_of(a[1]);
+        long half = 1L << (LONG_BITS / 2 - 1);
+        int no_overflow = !(i == LONG_MIN && j == -1);
+        switch (op) {
+        case I_ADD:
+            if (j >= 0 ? i <= LONG_MAX - j : i >= LONG_MIN - j) {
+                return make_int(i + j);
+            }
+            break;
+        case I_SUB:
+            if (j >= 0 ? i >= LONG_MIN + j : i <= LONG_MAX + j) {
+                return make_int(i - j);
+            }
+            break;
+        case I_MUL:
+            if (i >= -half && i <= half && j >= -half && j <= half) {
+                return make_int(i * j);
+            }
+            break;
+        case I_QUOT:
+            if (no_overflow) {
+                return p_int_quot(a);
+            }
+            break;
+        case I_REM:
+            if (no_overflow) {
+                return p_int_rem(a);
+            }
+            break;
+        case I_DIV:
+            if (no_overflow) {
+                return p_int_div(a);
+            }
+            break;
+        case I_MOD:
+            if (no_overflow) {
+                return p_int_mod(a);
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    big_of(a[0], &x);
+    big_of(a[1], &y);
+    switch (op) {
+    case I_ADD:
+        big_add(&x, &y, y.neg, &r);
+        break;
+    case I_SUB:
+        big_add(&x, &y, y.n > 0 && !y.neg, &r);
+        break;
+    case I_MUL:
+        big_mul(&x, &y, &r);
+        break;
+    case I_GCD:
+        big_gcd(&x, &y, &r);
+        break;
+    default:
+        big_divide(&x, &y, op == I_DIV || op == I_MOD, &q, &r);
+        if (op == I_QUOT || op == I_DIV) {
+            free(r.d);
+            r = q;
+        } else {
+            free(q.d);
+        }
+        break;
+    }
+    free(x.d);
+    free(y.d);
+    return big_obj(&r);
+}
+
+static int integer_cmp(Obj **a)
+{
+    Big x;
+    Big y;
+    int c;
+    if (KIND(a[0]) == O_INT && KIND(a[1]) == O_INT) {
+        long i = int_of(a[0]);
+        long j = int_of(a[1]);
+        return i < j ? -1 : i > j;
+    }
+    big_of(a[0], &x);
+    big_of(a[1], &y);
+    c = big_cmp(&x, &y);
+    free(x.d);
+    free(y.d);
+    return c;
+}
+
+static Obj *p_integer_add(Obj **a) { return integer_op(a, I_ADD); }
+static Obj *p_integer_sub(Obj **a) { return integer_op(a, I_SUB); }
+static Obj *p_integer_mul(Obj **a) { return integer_op(a, I_MUL); }
+static Obj *p_integer_quot(Obj **a) { return integer_op(a, I_QUOT); }
+static Obj *p_integer_rem(Obj **a) { return integer_op(a, I_REM); }
+static Obj *p_integer_div(Obj **a) { return integer_op(a, I_DIV); }
+static Obj *p_integer_mod(Obj **a) { return integer_op(a, I_MOD); }
+static Obj *p_integer_gcd(Obj **a) { return integer_op(a, I_GCD); }
+static Obj *p_integer_eq(Obj **a) { return make_bool(integer_cmp(a) == 0); }
+static Obj *p_integer_ne(Obj **a) { return make_bool(integer_cmp(a) != 0); }
+static Obj *p_integer_lt(Obj **a) { return make_bool(integer_cmp(a) < 0); }
+static Obj *p_integer_le(Obj **a) { return make_bool(integer_cmp(a) <= 0); }
+static Obj *p_integer_gt(Obj **a) { return make_bool(integer_cmp(a) > 0); }
+static Obj *p_integer_ge(Obj **a) { return make_bool(integer_cmp(a) >= 0); }
+
+static Obj *p_integer_negate(Obj **a)
+{
+    Big x;
+    if (KIND(a[0]) == O_INT && int_of(a[0]) != LONG_MIN) {
+        return make_int(-int_of(a[0]));
+    }
+    big_of(a[0], &x);
+    x.neg = x.n > 0 && !x.neg;
+    return big_obj(&x);
+}
+
+/* An Int is an Integer that fits in a long. */
+static Obj *p_integer_from_int(Obj **a)
+{
+    return a[0];
+}
+
+/* The low bits of an Integer, in two's complement, as GHC does. */
+static Obj *p_integer_to_int(Obj **a)
+{
+    unsigned long u = 0;
+    unsigned long i;
+    if (KIND(a[0]) == O_INT) {
+        return a[0];
+    }
+    i = SIZE(a[0]) - 1;
+    if (i > LONG_LIMBS) {
+        i = LONG_LIMBS;
+    }
+    while (i > 0) {
+        i--;
+        u = (u << LIMB_BITS) | W(a[0])[1 + i].u;
+    }
+    if (W(a[0])[0].i < 0) {
+        u = 0UL - u;
+    }
+    return make_int(u <= (unsigned long)LONG_MAX ? (long)u : -(long)(ULONG_MAX - u) - 1);
+}
+
 static Obj *p_error(Obj **a)
 {
     char *message = force_string(a[0]);
@@ -765,6 +1215,23 @@ static const PrimInfo prims[] = {
     {"ord", 1, 1, p_ord},
     {"chr", 1, 1, p_chr},
     {"intShow", 1, 1, p_int_show},
+    {"integerFromInt", 1, 1, p_integer_from_int},
+    {"integerToInt", 1, 1, p_integer_to_int},
+    {"integerAdd", 2, 3, p_integer_add},
+    {"integerSub", 2, 3, p_integer_sub},
+    {"integerMul", 2, 3, p_integer_mul},
+    {"integerNegate", 1, 1, p_integer_negate},
+    {"integerQuot", 2, 3, p_integer_quot},
+    {"integerRem", 2, 3, p_integer_rem},
+    {"integerDiv", 2, 3, p_integer_div},
+    {"integerMod", 2, 3, p_integer_mod},
+    {"integerGcd", 2, 3, p_integer_gcd},
+    {"integerEq", 2, 3, p_integer_eq},
+    {"integerNe", 2, 3, p_integer_ne},
+    {"integerLt", 2, 3, p_integer_lt},
+    {"integerLe", 2, 3, p_integer_le},
+    {"integerGt", 2, 3, p_integer_gt},
+    {"integerGe", 2, 3, p_integer_ge},
     {"error", 1, 1, p_error},
     {"putChar", 2, 1, p_put_char},
     {"getChar", 1, 0, p_get_char},

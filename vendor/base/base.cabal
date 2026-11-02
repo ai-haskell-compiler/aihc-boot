@@ -29,6 +29,7 @@ library
     GHC.List
     GHC.Maybe
     GHC.Num
+    GHC.Num.Integer
     GHC.Prim
     GHC.Real
     GHC.Show
