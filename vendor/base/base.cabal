@@ -17,8 +17,21 @@ library
   default-extensions: NoImplicitPrelude
 
   exposed-modules:
+    Data.Char
+    Data.Either
+    Data.List
+    Data.Maybe
+    Data.Tuple
     GHC.Base
+    GHC.Classes
+    GHC.Enum
     GHC.Generics
+    GHC.List
+    GHC.Maybe
+    GHC.Num
     GHC.Prim
+    GHC.Real
+    GHC.Show
     GHC.Types
     Prelude
+    System.IO

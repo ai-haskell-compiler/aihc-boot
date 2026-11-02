@@ -851,6 +851,24 @@ static void d_decl(Dbg *d, const void *x)
     const Decl *decl = x;
 
     switch (decl->kind) {
+    case DECL_FOREIGN:
+        d_decl_open(d, "Foreign", decl);
+        d_field(d, "callconv");
+        d_str(d, decl->callconv);
+        d_end(d);
+        d_field(d, "safety");
+        d_option(d, decl->safety, v_str);
+        d_end(d);
+        d_field(d, "entity");
+        d_option(d, decl->entity, v_literal);
+        d_end(d);
+        d_field(d, "name");
+        d_ident(d, &decl->name);
+        d_end(d);
+        d_field(d, "ty");
+        d_type(d, decl->ty);
+        d_end(d);
+        break;
     case DECL_TYPE_SIG:
         d_decl_open(d, "TypeSig", decl);
         d_field(d, "names");

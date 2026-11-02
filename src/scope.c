@@ -217,6 +217,34 @@ const Scope *program_scope(const Program *p, const char *module,
     return NULL;
 }
 
+Target program_builtin(const Program *p, const char *module, Space space,
+                       const char *name)
+{
+    size_t i;
+    Target t;
+    for (i = 0; i < p->builtin_modules.len; i++) {
+        const char *builtin = (const char *)p->builtin_modules.items[i];
+        const ModuleData *data;
+        const Entity *entity;
+        if (str_eq(builtin, module)) {
+            continue;
+        }
+        data = (const ModuleData *)strmap_get(&p->modules, builtin);
+        if (data == NULL || data->exports == NULL) {
+            continue;
+        }
+        entity = (const Entity *)strmap_get(
+            space == SPACE_TERM ? &data->exports->terms : &data->exports->types, name);
+        if (entity != NULL) {
+            return entity_target(entity);
+        }
+    }
+    memset(&t, 0, sizeof t);
+    t.kind = TARGET_ERROR;
+    t.message = "unbound";
+    return t;
+}
+
 const Vec *program_children(const Program *p, const Entity *parent)
 {
     return (const Vec *)strmap_get(&p->children, entity_key(parent));
@@ -405,6 +433,9 @@ static Scope *own_scope(const char *package, const Module *module, ResolveError 
                     add_type(scope, package, module, item->name.name);
                 }
             }
+            break;
+        case DECL_FOREIGN:
+            add_term(scope, package, module, decl->name.name);
             break;
         case DECL_PAT_SYN:
         case DECL_PAT_SYN_SIG:

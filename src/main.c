@@ -18,7 +18,10 @@
  *   debugging.
  * - `aihc-boot print FILE`: parse one file and print it back as source.
  *   This is what `check` sends to the reference parser.
- * - `aihc-boot run FILE.hs`: not implemented yet.
+ * - `aihc-boot run FILE.hs`: run a program against the boot `base`.
+ *   See "Eval strategy" in docs/PLAN.md.
+ * - `aihc-boot core FILE.hs`: print the Core of the program's own
+ *   module. For debugging and the golden tests.
  *
  * Each command returns NULL on success, or an error message.
  */
@@ -27,6 +30,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "desugar.h"
+#include "eval.h"
 #include "manifest.h"
 #include "resolve.h"
 #include "syntax.h"
@@ -42,7 +47,8 @@ static const char USAGE[] =
     "  aihc-boot lex FILE\n"
     "  aihc-boot parse FILE\n"
     "  aihc-boot print FILE\n"
-    "  aihc-boot run FILE.hs\n";
+    "  aihc-boot run FILE.hs\n"
+    "  aihc-boot core [--all] FILE.hs\n";
 
 /* The directory for the files that aihc-boot writes. */
 #define BUILD_DIR "build"
@@ -713,6 +719,122 @@ static char *lex_file(int argc, char **argv)
     return out_write(out.s, out.len);
 }
 
+/* --- run and core ------------------------------------------------------- */
+
+/* The program for a single-module file: the boot `base` and its
+ * dependencies as the resolver loads them, plus the file as the module
+ * of a package named "main". Fills *packages with the Package * list the
+ * desugarer takes. */
+static char *program_for_file(const char *file, Program **out, Vec *packages)
+{
+    StrMap vendored = vendored_packages();
+    Vec order;
+    Vec builtins;
+    Program *p;
+    size_t i;
+    size_t j;
+    Package *main_pkg;
+    SourceModule *source;
+    Report report;
+    Module *module;
+    char *e = package_order("base", &vendored, &order);
+    if (e != NULL) {
+        return e;
+    }
+    builtins = builtin_modules(&order);
+    p = program_new(&builtins);
+    vec_init(packages);
+    for (i = 0; i < order.len; i++) {
+        const char *name = (const char *)order.items[i];
+        const CabalPackage *cabal = (const CabalPackage *)strmap_get(&vendored, name);
+        Vec files = haskell_files(package_dir(name));
+        Package *package = (Package *)xcalloc(1, sizeof *package);
+        package->name = xstrdup(name);
+        package->extensions = cabal->extensions;
+        vec_init(&package->modules);
+        for (j = 0; j < files.len; j++) {
+            const char *path = (const char *)files.items[j];
+            Module *m = read_module(path, &report);
+            if (m == NULL) {
+                return str_printf("%s: %s", path, report.error);
+            }
+            source = (SourceModule *)xmalloc(sizeof *source);
+            source->path = xstrdup(path);
+            source->module = m;
+            vec_push(&package->modules, source);
+        }
+        program_add_package(p, package);
+        vec_push(packages, package);
+    }
+    module = read_module(file, &report);
+    if (module == NULL) {
+        return str_printf("%s: %s", file, report.error);
+    }
+    main_pkg = (Package *)xcalloc(1, sizeof *main_pkg);
+    main_pkg->name = xstrdup("main");
+    vec_init(&main_pkg->extensions);
+    vec_init(&main_pkg->modules);
+    source = (SourceModule *)xmalloc(sizeof *source);
+    source->path = xstrdup(file);
+    source->module = module;
+    vec_push(&main_pkg->modules, source);
+    program_add_package(p, main_pkg);
+    vec_push(packages, main_pkg);
+    *out = p;
+    return NULL;
+}
+
+static char *desugar_file(int argc, char **argv, const char *command, CoreProgram *core)
+{
+    Program *p = NULL;
+    Vec packages;
+    char *e;
+    if (argc != 1) {
+        return str_printf("%s takes one file", command);
+    }
+    if ((e = program_for_file(argv[0], &p, &packages)) != NULL) {
+        return e;
+    }
+    return desugar_program(p, &packages, core);
+}
+
+static char *run(int argc, char **argv)
+{
+    CoreProgram core;
+    char *e = desugar_file(argc, argv, "run", &core);
+    if (e != NULL) {
+        return e;
+    }
+    return eval_run(&core);
+}
+
+static char *print_core(int argc, char **argv)
+{
+    CoreProgram core;
+    StrBuf out;
+    size_t i;
+    int all = 0;
+    char *e;
+    /* `--all` prints the globals of every module, for debugging. */
+    if (argc == 2 && str_eq(argv[0], "--all")) {
+        all = 1;
+        argc--;
+        argv++;
+    }
+    e = desugar_file(argc, argv, "core", &core);
+    if (e != NULL) {
+        return e;
+    }
+    sb_init(&out);
+    for (i = 0; i < core.globals.len; i++) {
+        const Global *g = (const Global *)core.globals.items[i];
+        if (all || str_eq(g->module, "Main")) {
+            core_print_global(&out, g);
+        }
+    }
+    return out_write(out.s, out.len);
+}
+
 /* --- main ---------------------------------------------------------------- */
 
 int main(int argc, char **argv)
@@ -737,7 +859,9 @@ int main(int argc, char **argv)
     } else if (argc > 1 && str_eq(command, "print")) {
         result = print(rest_argc, rest);
     } else if (argc > 1 && str_eq(command, "run")) {
-        result = xstrdup("`run` is not implemented yet");
+        result = run(rest_argc, rest);
+    } else if (argc > 1 && str_eq(command, "core")) {
+        result = print_core(rest_argc, rest);
     } else if (argc > 1 && (str_eq(command, "--help") || str_eq(command, "-h"))) {
         result = out_str(USAGE);
     } else {

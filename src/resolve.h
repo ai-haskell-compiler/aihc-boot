@@ -194,6 +194,12 @@ const Scope *program_scope(const Program *p, const char *module,
 /* The constructors, fields, methods and associated types of a type or
  * class (Child *). NULL when there are none. */
 const Vec *program_children(const Program *p, const Entity *parent);
+/* The target of a name that desugaring applies without an import, such
+ * as `fromInteger` for an integer literal: the name in the exports of the
+ * builtin modules other than module itself. An error target when no
+ * builtin module exports it. */
+Target program_builtin(const Program *p, const char *module, Space space,
+                       const char *name);
 
 /* A name without the backquotes of `op` in backquotes. */
 const char *bare(const char *name);

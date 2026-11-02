@@ -1,0 +1,1234 @@
+/* The evaluator: a lazy abstract machine over Core. See eval.h.
+ *
+ * Values live in a heap of words. Every object starts with a header word
+ * that holds its kind and its size in payload words. The kinds:
+ *
+ *   INT        i                 a machine integer
+ *   CHAR       u                 a Unicode code point
+ *   CON        con f1 .. fn      a constructor with its fields
+ *   FUN        lam env           a closure of a CORE_LAM
+ *   PAP        fun a1 .. ak      a partial application of a FUN or a PRIM
+ *   PRIM       info              a primitive (allocated outside the heap)
+ *   THUNK      code env          a suspended expression
+ *   IND        value             a thunk that has been evaluated
+ *   BLACKHOLE                    a thunk under evaluation
+ *   ENV        parent s1 .. sn   a frame of local variables
+ *   STR        bytes len         a string literal, not yet unpacked
+ *   FWD        new               a forwarding pointer, during collection
+ *
+ * The machine keeps an explicit stack of continuation frames, so the
+ * collector finds every live value in the stack, the registers and the
+ * globals. The collector copies the live objects to a new space
+ * (Cheney's algorithm) and doubles the space when it fills up.
+ *
+ * Two rules keep allocation safe. First, a sequence of allocations
+ * reserves its total size first, so no collection happens in the middle
+ * of it. Second, a primitive reads its arguments before it allocates or
+ * evaluates anything, because both can move objects, and it registers
+ * every pointer it keeps across such a call as a root.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "eval.h"
+
+/* --- Objects ------------------------------------------------------------ */
+
+typedef union {
+    Obj *p;
+    long i;
+    unsigned long u;
+    const void *c;
+} Word;
+
+struct Obj {
+    Word hdr;
+};
+
+enum {
+    O_INT,
+    O_CHAR,
+    O_CON,
+    O_FUN,
+    O_PAP,
+    O_PRIM,
+    O_THUNK,
+    O_IND,
+    O_BLACKHOLE,
+    O_ENV,
+    O_STR,
+    O_FWD
+};
+
+#define KIND(o) ((o)->hdr.u & 0xFF)
+#define SIZE(o) ((o)->hdr.u >> 8)
+#define W(o) ((Word *)(o) + 1)
+
+static void set_hdr(Obj *o, unsigned long kind, unsigned long size)
+{
+    o->hdr.u = kind | (size << 8);
+}
+
+/* --- The heap ----------------------------------------------------------- */
+
+static Word *heap;      /* the current space */
+static Word *heap_end;
+static Word *hp;        /* the next free word */
+static unsigned long heap_size; /* in words */
+
+static CoreProgram *prog;
+
+/* Extra roots that primitives register (pointers to object pointers). */
+static Obj ***roots;
+static size_t nroots;
+static size_t roots_cap;
+
+static void root_push(Obj **p)
+{
+    if (nroots == roots_cap) {
+        roots_cap = roots_cap ? roots_cap * 2 : 64;
+        roots = (Obj ***)xrealloc(roots, roots_cap * sizeof *roots);
+    }
+    roots[nroots++] = p;
+}
+
+static void root_pop(void)
+{
+    nroots--;
+}
+
+/* --- The stack ---------------------------------------------------------- */
+
+typedef enum {
+    K_STOP,   /* the end of a run */
+    K_UPDATE, /* a: the thunk to update with the value */
+    K_ARG,    /* a: an argument waiting for a function */
+    K_CASE,   /* code: the CORE_CASE; b: its environment */
+    K_PRIM    /* a: the arguments of a primitive (a PAP); n: the index of
+                 the argument being evaluated */
+} FrameKind;
+
+typedef struct {
+    FrameKind kind;
+    Obj *a;
+    Obj *b;
+    const void *code;
+    unsigned long n;
+} Frame;
+
+static Frame *stack;
+static size_t sp;
+static size_t stack_cap;
+
+/* The machine registers. */
+static Obj *reg_env;
+static Obj *reg_val;
+
+static void push(FrameKind kind, Obj *a, Obj *b, const void *code, unsigned long n)
+{
+    Frame *f;
+    if (sp == stack_cap) {
+        stack_cap = stack_cap ? stack_cap * 2 : 4096;
+        stack = (Frame *)xrealloc(stack, stack_cap * sizeof *stack);
+    }
+    f = &stack[sp++];
+    f->kind = kind;
+    f->a = a;
+    f->b = b;
+    f->code = code;
+    f->n = n;
+}
+
+/* --- Run-time errors ---------------------------------------------------- */
+
+static void runtime_error(const char *message)
+{
+    fflush(stdout);
+    fprintf(stderr, "aihc-boot: %s\n", message);
+    exit(1);
+}
+
+/* --- Garbage collection ------------------------------------------------- */
+
+static int in_heap(const Obj *o, const Word *space, const Word *end)
+{
+    return (const Word *)o >= space && (const Word *)o < end;
+}
+
+static Word *to_space;
+static Word *to_hp;
+/* The other semispace, kept between collections so that a collection
+ * does not allocate and free a space every time. */
+static Word *spare;
+static unsigned long spare_size;
+
+static Obj *copy(Obj *o, const Word *from, const Word *from_end)
+{
+    Obj *n;
+    unsigned long size;
+    if (o == NULL || !in_heap(o, from, from_end)) {
+        return o;
+    }
+    if (KIND(o) == O_FWD) {
+        return W(o)[0].p;
+    }
+    size = SIZE(o);
+    n = (Obj *)to_hp;
+    to_hp += 1 + size;
+    memcpy(n, o, (1 + size) * sizeof(Word));
+    set_hdr(o, O_FWD, size);
+    W(o)[0].p = n;
+    return n;
+}
+
+/* The range of pointer fields of an object: from *first to *last
+ * exclusive. */
+static void pointer_fields(const Obj *o, unsigned long *first, unsigned long *last)
+{
+    switch (KIND(o)) {
+    case O_CON:
+        *first = 1;
+        *last = SIZE(o);
+        break;
+    case O_FUN:
+    case O_THUNK:
+        *first = 1;
+        *last = 2;
+        break;
+    case O_PAP:
+    case O_ENV:
+        *first = 0;
+        *last = SIZE(o);
+        break;
+    case O_IND:
+        *first = 0;
+        *last = 1;
+        break;
+    default:
+        *first = 0;
+        *last = 0;
+        break;
+    }
+}
+
+static void gc(unsigned long need)
+{
+    Word *from = heap;
+    Word *from_end = heap_end;
+    unsigned long new_size = heap_size;
+    size_t i;
+    Word *scan;
+    unsigned long live;
+    for (;;) {
+        if (spare != NULL && spare_size == new_size) {
+            to_space = spare;
+            spare = NULL;
+        } else {
+            free(spare);
+            spare = NULL;
+            to_space = (Word *)xmalloc(new_size * sizeof(Word));
+        }
+        to_hp = to_space;
+        for (i = 0; i < prog->globals.len; i++) {
+            Global *g = (Global *)prog->globals.items[i];
+            g->value = copy((Obj *)g->value, from, from_end);
+        }
+        for (i = 0; i < sp; i++) {
+            stack[i].a = copy(stack[i].a, from, from_end);
+            stack[i].b = copy(stack[i].b, from, from_end);
+        }
+        for (i = 0; i < nroots; i++) {
+            *roots[i] = copy(*roots[i], from, from_end);
+        }
+        reg_env = copy(reg_env, from, from_end);
+        reg_val = copy(reg_val, from, from_end);
+        scan = to_space;
+        while (scan < to_hp) {
+            Obj *o = (Obj *)scan;
+            unsigned long first;
+            unsigned long last;
+            unsigned long k;
+            pointer_fields(o, &first, &last);
+            for (k = first; k < last; k++) {
+                W(o)[k].p = copy(W(o)[k].p, from, from_end);
+            }
+            scan += 1 + SIZE(o);
+        }
+        live = (unsigned long)(to_hp - to_space);
+        if ((live + need) * 2 <= new_size) {
+            break;
+        }
+        /* The space is more than half full after the collection: collect
+         * again into a space twice as large. The forwarding pointers in
+         * the old space are still valid, so the copied objects become
+         * the new from-space. */
+        free(from == heap ? NULL : from);
+        from = to_space;
+        from_end = to_hp;
+        new_size *= 2;
+    }
+    if (from != heap) {
+        free(from);
+    }
+    if (new_size == heap_size) {
+        spare = heap;
+        spare_size = heap_size;
+    } else {
+        free(heap);
+    }
+    heap = to_space;
+    heap_end = to_space + new_size;
+    hp = to_hp;
+    heap_size = new_size;
+}
+
+/* Make room for words (headers included) without a collection in the
+ * allocations that follow. */
+static void reserve(unsigned long words)
+{
+    if (hp + words > heap_end) {
+        gc(words);
+    }
+}
+
+/* Allocate an object of size payload words. The caller has reserved the
+ * room. */
+static Obj *alloc(unsigned long kind, unsigned long size)
+{
+    Obj *o = (Obj *)hp;
+    hp += 1 + size;
+    set_hdr(o, kind, size);
+    return o;
+}
+
+/* Allocate an object outside the heap, for values that live for the
+ * whole run and point to nothing in the heap. */
+static Obj *alloc_static(unsigned long kind, unsigned long size)
+{
+    Obj *o = (Obj *)xcalloc(1 + size, sizeof(Word));
+    set_hdr(o, kind, size);
+    return o;
+}
+
+/* --- Small values ------------------------------------------------------- */
+
+static Obj *small_ints[256 + 16];
+static Obj *small_chars[256];
+
+static Obj *make_int(long i)
+{
+    Obj *o;
+    if (i >= -16 && i < 256) {
+        return small_ints[i + 16];
+    }
+    reserve(2);
+    o = alloc(O_INT, 1);
+    W(o)[0].i = i;
+    return o;
+}
+
+static Obj *make_char(unsigned long c)
+{
+    Obj *o;
+    if (c < 256) {
+        return small_chars[c];
+    }
+    reserve(2);
+    o = alloc(O_CHAR, 1);
+    W(o)[0].u = c;
+    return o;
+}
+
+/* The static object of a nullary constructor. */
+static Obj *nullary(ConInfo *con)
+{
+    if (con->value == NULL) {
+        Obj *o = alloc_static(O_CON, 1);
+        W(o)[0].c = con;
+        con->value = o;
+    }
+    return (Obj *)con->value;
+}
+
+static Obj *make_bool(int b)
+{
+    return nullary(b ? prog->con_true : prog->con_false);
+}
+
+/* --- Atoms: the arguments of applications and constructors -------------- */
+
+/* The words that atom needs. */
+static unsigned long atom_size(const Core *e)
+{
+    unsigned long n;
+    size_t i;
+    switch (e->kind) {
+    case CORE_VAR:
+    case CORE_GLOBAL:
+        return 0;
+    case CORE_INT:
+    case CORE_CHAR:
+        return 2;
+    case CORE_STR:
+        return 3;
+    case CORE_LAM:
+        return 3;
+    case CORE_CON:
+        if (e->args.len == 0) {
+            return 0;
+        }
+        n = 2 + e->args.len;
+        for (i = 0; i < e->args.len; i++) {
+            n += atom_size((const Core *)e->args.items[i]);
+        }
+        return n;
+    default:
+        return 3;
+    }
+}
+
+static Obj *lookup_var(const Core *e, Obj *env)
+{
+    unsigned long up = e->up;
+    while (up > 0) {
+        env = W(env)[0].p;
+        up--;
+    }
+    return W(env)[1 + e->slot].p;
+}
+
+/* The value of an atom, allocated from reserved room. A variable is its
+ * value; a literal, a lambda and a constructor are built directly; any
+ * other expression becomes a thunk. */
+static Obj *atom(const Core *e, Obj *env)
+{
+    Obj *o;
+    size_t i;
+    switch (e->kind) {
+    case CORE_VAR:
+        return lookup_var(e, env);
+    case CORE_GLOBAL:
+        return (Obj *)e->global->value;
+    case CORE_INT:
+        if (e->ival >= -16 && e->ival < 256) {
+            return small_ints[e->ival + 16];
+        }
+        o = alloc(O_INT, 1);
+        W(o)[0].i = e->ival;
+        return o;
+    case CORE_CHAR:
+        if (e->cval < 256) {
+            return small_chars[e->cval];
+        }
+        o = alloc(O_CHAR, 1);
+        W(o)[0].u = e->cval;
+        return o;
+    case CORE_STR:
+        o = alloc(O_STR, 2);
+        W(o)[0].c = e->sval;
+        W(o)[1].u = e->slen;
+        return o;
+    case CORE_LAM:
+        o = alloc(O_FUN, 2);
+        W(o)[0].c = e;
+        W(o)[1].p = env;
+        return o;
+    case CORE_CON:
+        if (e->args.len == 0) {
+            return nullary(e->con);
+        }
+        o = alloc(O_CON, 1 + e->args.len);
+        W(o)[0].c = e->con;
+        for (i = 0; i < e->args.len; i++) {
+            W(o)[1 + i].p = atom((const Core *)e->args.items[i], env);
+        }
+        return o;
+    default:
+        o = alloc(O_THUNK, 2);
+        W(o)[0].c = e;
+        W(o)[1].p = env;
+        return o;
+    }
+}
+
+/* Whether an atom reads a slot of the innermost frame: a variable of
+ * the let group itself, or a constructor with such a variable as a
+ * field. */
+static int reads_own_frame(const Core *e)
+{
+    size_t i;
+    switch (e->kind) {
+    case CORE_VAR:
+        return e->up == 0;
+    case CORE_CON:
+        for (i = 0; i < e->args.len; i++) {
+            if (reads_own_frame((const Core *)e->args.items[i])) {
+                return 1;
+            }
+        }
+        return 0;
+    default:
+        return 0;
+    }
+}
+
+/* A let binding. A binder that reads a slot of its own group may read
+ * a slot that is not filled yet, so it becomes a thunk. When the thunk
+ * runs, the slots are filled, and a recursive structure such as
+ * `xs = x : xs` closes through the thunk's indirection. */
+static unsigned long bind_size(const Core *e)
+{
+    return reads_own_frame(e) ? 3 : atom_size(e);
+}
+
+static Obj *bind_atom(const Core *e, Obj *frame)
+{
+    Obj *o;
+    if (!reads_own_frame(e)) {
+        return atom(e, frame);
+    }
+    o = alloc(O_THUNK, 2);
+    W(o)[0].c = e;
+    W(o)[1].p = frame;
+    return o;
+}
+
+/* --- Primitives --------------------------------------------------------- */
+
+static const PrimInfo *prim_of(const Obj *o)
+{
+    return (const PrimInfo *)W(o)[0].c;
+}
+
+static long int_of(const Obj *o)
+{
+    return W(o)[0].i;
+}
+
+static unsigned long char_of(const Obj *o)
+{
+    return W(o)[0].u;
+}
+
+/* A constructor application with one field: `IORes x`. */
+static Obj *io_result(Obj *x)
+{
+    Obj *o;
+    root_push(&x);
+    reserve(3);
+    root_pop();
+    o = alloc(O_CON, 2);
+    W(o)[0].c = prog->con_iores;
+    W(o)[1].p = x;
+    return o;
+}
+
+static Obj *run(Obj *start);
+
+/* Evaluate an object to weak head normal form, from inside a primitive.
+ * Objects may move: the caller keeps no other pointer across the call
+ * unless it is registered as a root. */
+static Obj *force(Obj *o)
+{
+    return run(o);
+}
+
+/* Read a Haskell String (a list of Char) into a UTF-8 buffer, forcing
+ * it. */
+static char *force_string(Obj *list)
+{
+    StrBuf b;
+    sb_init(&b);
+    root_push(&list);
+    for (;;) {
+        Obj *cell = force(list);
+        const ConInfo *con;
+        Obj *head;
+        if (KIND(cell) != O_CON) {
+            break;
+        }
+        con = (const ConInfo *)W(cell)[0].c;
+        if (con->arity != 2) {
+            break;
+        }
+        head = W(cell)[1].p;
+        list = W(cell)[2].p;
+        head = force(head);
+        if (KIND(head) != O_CHAR) {
+            break;
+        }
+        sb_put_utf8(&b, char_of(head));
+    }
+    root_pop();
+    return sb_take(&b);
+}
+
+/* A Haskell String from a C string: a list of Char, built from the end.
+ * The characters are ASCII, so they are static. */
+static Obj *make_string(const char *s)
+{
+    size_t n = strlen(s);
+    Obj *list;
+    size_t i;
+    reserve(3 * (unsigned long)n);
+    list = nullary(prog->con_nil);
+    i = n;
+    while (i > 0) {
+        Obj *cell = alloc(O_CON, 3);
+        i--;
+        W(cell)[0].c = prog->con_cons;
+        W(cell)[1].p = small_chars[(unsigned char)s[i]];
+        W(cell)[2].p = list;
+        list = cell;
+    }
+    return list;
+}
+
+static Obj *p_int_add(Obj **a) { return make_int(int_of(a[0]) + int_of(a[1])); }
+static Obj *p_int_sub(Obj **a) { return make_int(int_of(a[0]) - int_of(a[1])); }
+static Obj *p_int_mul(Obj **a) { return make_int(int_of(a[0]) * int_of(a[1])); }
+static Obj *p_int_negate(Obj **a) { return make_int(-int_of(a[0])); }
+
+static Obj *p_int_quot(Obj **a)
+{
+    long y = int_of(a[1]);
+    if (y == 0) {
+        runtime_error("divide by zero");
+    }
+    return make_int(int_of(a[0]) / y);
+}
+
+static Obj *p_int_rem(Obj **a)
+{
+    long y = int_of(a[1]);
+    if (y == 0) {
+        runtime_error("divide by zero");
+    }
+    return make_int(int_of(a[0]) % y);
+}
+
+/* Division that rounds toward negative infinity, as Haskell's div. */
+static Obj *p_int_div(Obj **a)
+{
+    long x = int_of(a[0]);
+    long y = int_of(a[1]);
+    long q;
+    if (y == 0) {
+        runtime_error("divide by zero");
+    }
+    q = x / y;
+    if ((x % y != 0) && ((x < 0) != (y < 0))) {
+        q--;
+    }
+    return make_int(q);
+}
+
+static Obj *p_int_mod(Obj **a)
+{
+    long x = int_of(a[0]);
+    long y = int_of(a[1]);
+    long r;
+    if (y == 0) {
+        runtime_error("divide by zero");
+    }
+    r = x % y;
+    if (r != 0 && ((r < 0) != (y < 0))) {
+        r += y;
+    }
+    return make_int(r);
+}
+
+static Obj *p_int_eq(Obj **a) { return make_bool(int_of(a[0]) == int_of(a[1])); }
+static Obj *p_int_ne(Obj **a) { return make_bool(int_of(a[0]) != int_of(a[1])); }
+static Obj *p_int_lt(Obj **a) { return make_bool(int_of(a[0]) < int_of(a[1])); }
+static Obj *p_int_le(Obj **a) { return make_bool(int_of(a[0]) <= int_of(a[1])); }
+static Obj *p_int_gt(Obj **a) { return make_bool(int_of(a[0]) > int_of(a[1])); }
+static Obj *p_int_ge(Obj **a) { return make_bool(int_of(a[0]) >= int_of(a[1])); }
+
+static Obj *p_char_eq(Obj **a) { return make_bool(char_of(a[0]) == char_of(a[1])); }
+static Obj *p_char_ne(Obj **a) { return make_bool(char_of(a[0]) != char_of(a[1])); }
+static Obj *p_char_lt(Obj **a) { return make_bool(char_of(a[0]) < char_of(a[1])); }
+static Obj *p_char_le(Obj **a) { return make_bool(char_of(a[0]) <= char_of(a[1])); }
+static Obj *p_char_gt(Obj **a) { return make_bool(char_of(a[0]) > char_of(a[1])); }
+static Obj *p_char_ge(Obj **a) { return make_bool(char_of(a[0]) >= char_of(a[1])); }
+
+static Obj *p_ord(Obj **a) { return make_int((long)char_of(a[0])); }
+
+static Obj *p_chr(Obj **a)
+{
+    long i = int_of(a[0]);
+    if (i < 0 || i > 0x10FFFF) {
+        runtime_error("chr: bad argument");
+    }
+    return make_char((unsigned long)i);
+}
+
+static Obj *p_int_show(Obj **a)
+{
+    char buf[32];
+    sprintf(buf, "%ld", int_of(a[0]));
+    return make_string(buf);
+}
+
+static Obj *p_error(Obj **a)
+{
+    char *message = force_string(a[0]);
+    runtime_error(message);
+    return NULL;
+}
+
+static Obj *p_put_char(Obj **a)
+{
+    StrBuf b;
+    sb_init(&b);
+    sb_put_utf8(&b, char_of(a[0]));
+    fwrite(b.s, 1, b.len, stdout);
+    free(b.s);
+    return io_result(nullary(prog->con_unit));
+}
+
+/* One code point from stdin, or -1 at the end of the input. Invalid
+ * bytes come back as U+FFFD. */
+static Obj *p_get_char(Obj **a)
+{
+    int c = getc(stdin);
+    unsigned long cp;
+    int extra;
+    int i;
+    (void)a;
+    if (c == EOF) {
+        return io_result(make_int(-1));
+    }
+    if (c < 0x80) {
+        return io_result(make_int(c));
+    }
+    if ((c & 0xE0) == 0xC0) {
+        cp = (unsigned long)c & 0x1F;
+        extra = 1;
+    } else if ((c & 0xF0) == 0xE0) {
+        cp = (unsigned long)c & 0x0F;
+        extra = 2;
+    } else if ((c & 0xF8) == 0xF0) {
+        cp = (unsigned long)c & 0x07;
+        extra = 3;
+    } else {
+        return io_result(make_int(0xFFFD));
+    }
+    for (i = 0; i < extra; i++) {
+        int d = getc(stdin);
+        if (d == EOF || (d & 0xC0) != 0x80) {
+            if (d != EOF) {
+                ungetc(d, stdin);
+            }
+            return io_result(make_int(0xFFFD));
+        }
+        cp = (cp << 6) | ((unsigned long)d & 0x3F);
+    }
+    return io_result(make_int((long)cp));
+}
+
+static Obj *p_flush(Obj **a)
+{
+    (void)a;
+    fflush(stdout);
+    return io_result(nullary(prog->con_unit));
+}
+
+/* The argument is evaluated and returned: `seq` on one argument. */
+static Obj *p_whnf(Obj **a)
+{
+    return a[0];
+}
+
+static const PrimInfo prims[] = {
+    {"intAdd", 2, 3, p_int_add},
+    {"intSub", 2, 3, p_int_sub},
+    {"intMul", 2, 3, p_int_mul},
+    {"intQuot", 2, 3, p_int_quot},
+    {"intRem", 2, 3, p_int_rem},
+    {"intDiv", 2, 3, p_int_div},
+    {"intMod", 2, 3, p_int_mod},
+    {"intNegate", 1, 1, p_int_negate},
+    {"intEq", 2, 3, p_int_eq},
+    {"intNe", 2, 3, p_int_ne},
+    {"intLt", 2, 3, p_int_lt},
+    {"intLe", 2, 3, p_int_le},
+    {"intGt", 2, 3, p_int_gt},
+    {"intGe", 2, 3, p_int_ge},
+    {"charEq", 2, 3, p_char_eq},
+    {"charNe", 2, 3, p_char_ne},
+    {"charLt", 2, 3, p_char_lt},
+    {"charLe", 2, 3, p_char_le},
+    {"charGt", 2, 3, p_char_gt},
+    {"charGe", 2, 3, p_char_ge},
+    {"ord", 1, 1, p_ord},
+    {"chr", 1, 1, p_chr},
+    {"intShow", 1, 1, p_int_show},
+    {"error", 1, 1, p_error},
+    {"putChar", 2, 1, p_put_char},
+    {"getChar", 1, 0, p_get_char},
+    {"flush", 1, 0, p_flush},
+    {"whnf", 1, 1, p_whnf},
+    {NULL, 0, 0, NULL}
+};
+
+const PrimInfo *prim_lookup(const char *name)
+{
+    size_t i;
+    for (i = 0; prims[i].name != NULL; i++) {
+        if (str_eq(prims[i].name, name)) {
+            return &prims[i];
+        }
+    }
+    return NULL;
+}
+
+/* --- The machine -------------------------------------------------------- */
+
+#define MAX_PRIM_ARGS 8
+
+/* Call a primitive on its collected arguments (a PAP object). */
+static Obj *call_prim(const PrimInfo *info, const Obj *args)
+{
+    Obj *argv[MAX_PRIM_ARGS];
+    unsigned long j;
+    for (j = 0; j < info->arity && j < MAX_PRIM_ARGS; j++) {
+        argv[j] = W(args)[1 + j].p;
+    }
+    return info->fn(argv);
+}
+
+/* The number of K_ARG frames on top of the stack. */
+static unsigned long args_on_stack(void)
+{
+    unsigned long n = 0;
+    while (n < sp && stack[sp - 1 - n].kind == K_ARG) {
+        n++;
+    }
+    return n;
+}
+
+/* The alternative of a case for a value. */
+static const CoreAlt *select_alt(const Core *c, const Obj *v)
+{
+    size_t i;
+    const CoreAlt *dflt = NULL;
+    for (i = 0; i < c->alts.len; i++) {
+        const CoreAlt *a = (const CoreAlt *)c->alts.items[i];
+        switch (a->kind) {
+        case ALT_CON:
+            if (KIND(v) == O_CON && (const ConInfo *)W(v)[0].c == a->con) {
+                return a;
+            }
+            break;
+        case ALT_INT:
+            if (KIND(v) == O_INT && int_of(v) == a->ival) {
+                return a;
+            }
+            break;
+        case ALT_CHAR:
+            if (KIND(v) == O_CHAR && char_of(v) == a->cval) {
+                return a;
+            }
+            break;
+        case ALT_DEFAULT:
+            if (dflt == NULL) {
+                dflt = a;
+            }
+            break;
+        }
+    }
+    return dflt;
+}
+
+/* Run the machine from an object until the K_STOP frame that this call
+ * pushes is reached. Returns the value in weak head normal form. */
+static Obj *run(Obj *start)
+{
+    const Core *code = NULL;
+    Obj *o;
+    push(K_STOP, NULL, NULL, NULL, 0);
+    o = start;
+    goto enter;
+
+eval:
+    switch (code->kind) {
+    case CORE_VAR:
+        o = lookup_var(code, reg_env);
+        goto enter;
+    case CORE_GLOBAL:
+        o = (Obj *)code->global->value;
+        goto enter;
+    case CORE_INT:
+        reg_val = make_int(code->ival);
+        goto ret;
+    case CORE_CHAR:
+        reg_val = make_char(code->cval);
+        goto ret;
+    case CORE_STR:
+    case CORE_LAM:
+    case CORE_CON:
+        reserve(atom_size(code));
+        o = atom(code, reg_env);
+        goto enter;
+    case CORE_APP: {
+        /* Push the arguments, the first on top, then evaluate the
+         * function. */
+        size_t i = code->args.len;
+        while (i > 0) {
+            const Core *arg;
+            i--;
+            arg = (const Core *)code->args.items[i];
+            reserve(atom_size(arg));
+            push(K_ARG, atom(arg, reg_env), NULL, NULL, 0);
+        }
+        code = code->fun;
+        goto eval;
+    }
+    case CORE_LET: {
+        /* One frame for the binders. Its slots are atoms built in the
+         * frame itself, so the bindings can be recursive. */
+        unsigned long n = code->binds.len;
+        unsigned long words = 2 + n;
+        unsigned long i;
+        Obj *frame;
+        for (i = 0; i < n; i++) {
+            words += bind_size((const Core *)code->binds.items[i]);
+        }
+        reserve(words);
+        frame = alloc(O_ENV, 1 + n);
+        W(frame)[0].p = reg_env;
+        for (i = 0; i < n; i++) {
+            W(frame)[1 + i].p = NULL;
+        }
+        for (i = 0; i < n; i++) {
+            W(frame)[1 + i].p = bind_atom((const Core *)code->binds.items[i], frame);
+        }
+        reg_env = frame;
+        code = code->body;
+        goto eval;
+    }
+    case CORE_CASE:
+        push(K_CASE, NULL, reg_env, code, 0);
+        code = code->scrut;
+        goto eval;
+    }
+
+enter:
+    /* Evaluate an object: follow indirections and enter thunks. */
+    for (;;) {
+        switch (KIND(o)) {
+        case O_IND:
+            o = W(o)[0].p;
+            continue;
+        case O_THUNK:
+            push(K_UPDATE, o, NULL, NULL, 0);
+            code = (const Core *)W(o)[0].c;
+            reg_env = W(o)[1].p;
+            set_hdr(o, O_BLACKHOLE, 2);
+            goto eval;
+        case O_BLACKHOLE:
+            runtime_error("<<loop>>");
+            break;
+        case O_STR: {
+            /* Unpack one character: the object becomes the cons cell. */
+            const char *s = (const char *)W(o)[0].c;
+            unsigned long len = W(o)[1].u;
+            if (len == 0) {
+                set_hdr(o, O_IND, 2);
+                W(o)[0].p = nullary(prog->con_nil);
+                o = W(o)[0].p;
+                continue;
+            } else {
+                const char *p = s;
+                unsigned long c = utf8_next(&p);
+                unsigned long used = (unsigned long)(p - s);
+                Obj *head;
+                Obj *tail;
+                Obj *cell;
+                root_push(&o);
+                reserve(2 + 3 + 3);
+                root_pop();
+                head = c < 256 ? small_chars[c] : alloc(O_CHAR, 1);
+                if (c >= 256) {
+                    W(head)[0].u = c;
+                }
+                tail = alloc(O_STR, 2);
+                W(tail)[0].c = p;
+                W(tail)[1].u = len - used;
+                cell = alloc(O_CON, 3);
+                W(cell)[0].c = prog->con_cons;
+                W(cell)[1].p = head;
+                W(cell)[2].p = tail;
+                set_hdr(o, O_IND, 2);
+                W(o)[0].p = cell;
+                reg_val = cell;
+                goto ret;
+            }
+        }
+        default:
+            reg_val = o;
+            goto ret;
+        }
+    }
+
+ret:
+    /* Return the value in reg_val to the frame on top of the stack. */
+    for (;;) {
+        Frame *f = &stack[sp - 1];
+        switch (f->kind) {
+        case K_STOP:
+            sp--;
+            return reg_val;
+        case K_UPDATE: {
+            Obj *t = f->a;
+            set_hdr(t, O_IND, 2);
+            W(t)[0].p = reg_val;
+            W(t)[1].p = NULL;
+            sp--;
+            continue;
+        }
+        case K_CASE: {
+            const Core *c = (const Core *)f->code;
+            const CoreAlt *alt = select_alt(c, reg_val);
+            Obj *env = f->b;
+            sp--;
+            if (alt == NULL) {
+                runtime_error("case: no alternative matches");
+            }
+            if (alt->kind == ALT_CON && alt->con->arity > 0) {
+                unsigned long n = (unsigned long)alt->con->arity;
+                unsigned long i;
+                Obj *frame;
+                reg_env = env;
+                reserve(2 + n);
+                frame = alloc(O_ENV, 1 + n);
+                W(frame)[0].p = reg_env;
+                for (i = 0; i < n; i++) {
+                    W(frame)[1 + i].p = W(reg_val)[1 + i].p;
+                }
+                reg_env = frame;
+            } else {
+                reg_env = env;
+            }
+            code = alt->body;
+            goto eval;
+        }
+        case K_ARG: {
+            /* Apply the value to the arguments on the stack. */
+            Obj *fun = reg_val;
+            Obj *inner;
+            unsigned long have = 0; /* arguments already in a PAP */
+            unsigned long arity;
+            unsigned long avail = args_on_stack();
+            unsigned long i;
+            if (KIND(fun) == O_PAP) {
+                inner = W(fun)[0].p;
+                have = SIZE(fun) - 1;
+            } else {
+                inner = fun;
+            }
+            if (KIND(inner) == O_FUN) {
+                arity = ((const Core *)W(inner)[0].c)->arity;
+            } else if (KIND(inner) == O_PRIM) {
+                arity = prim_of(inner)->arity;
+            } else {
+                runtime_error("a value that is not a function was applied");
+                return NULL;
+            }
+            if (have + avail < arity) {
+                /* Not enough arguments: a (bigger) partial application. */
+                Obj *pap;
+                reserve(2 + have + avail);
+                fun = reg_val;
+                inner = KIND(fun) == O_PAP ? W(fun)[0].p : fun;
+                pap = alloc(O_PAP, 1 + have + avail);
+                W(pap)[0].p = inner;
+                for (i = 0; i < have; i++) {
+                    W(pap)[1 + i].p = W(fun)[1 + i].p;
+                }
+                for (i = 0; i < avail; i++) {
+                    W(pap)[1 + have + i].p = stack[sp - 1 - i].a;
+                }
+                sp -= avail;
+                reg_val = pap;
+                continue;
+            }
+            if (KIND(inner) == O_FUN) {
+                const Core *lam;
+                Obj *frame;
+                reserve(2 + arity);
+                fun = reg_val;
+                inner = KIND(fun) == O_PAP ? W(fun)[0].p : fun;
+                lam = (const Core *)W(inner)[0].c;
+                frame = alloc(O_ENV, 1 + arity);
+                W(frame)[0].p = W(inner)[1].p;
+                for (i = 0; i < have; i++) {
+                    W(frame)[1 + i].p = W(fun)[1 + i].p;
+                }
+                for (i = have; i < arity; i++) {
+                    W(frame)[1 + i].p = stack[sp - 1 - (i - have)].a;
+                }
+                sp -= arity - have;
+                reg_env = frame;
+                code = lam->body;
+                goto eval;
+            } else {
+                /* A primitive: collect the arguments, then evaluate the
+                 * strict ones before the call. */
+                const PrimInfo *info = prim_of(inner);
+                Obj *args;
+                unsigned long j;
+                reserve(2 + arity);
+                fun = reg_val;
+                inner = KIND(fun) == O_PAP ? W(fun)[0].p : fun;
+                args = alloc(O_PAP, 1 + arity);
+                W(args)[0].p = inner;
+                for (i = 0; i < have; i++) {
+                    W(args)[1 + i].p = W(fun)[1 + i].p;
+                }
+                for (i = have; i < arity; i++) {
+                    W(args)[1 + i].p = stack[sp - 1 - (i - have)].a;
+                }
+                sp -= arity - have;
+                for (j = 0; j < arity; j++) {
+                    if (info->strict & (1UL << j)) {
+                        break;
+                    }
+                }
+                if (j < arity) {
+                    push(K_PRIM, args, NULL, info, j);
+                    o = W(args)[1 + j].p;
+                    goto enter;
+                }
+                push(K_PRIM, args, NULL, info, arity);
+                o = call_prim(info, args);
+                sp--;
+                goto enter;
+            }
+        }
+        case K_PRIM: {
+            const PrimInfo *info = (const PrimInfo *)f->code;
+            Obj *args = f->a;
+            unsigned long j = f->n;
+            W(args)[1 + j].p = reg_val;
+            for (j++; j < info->arity; j++) {
+                if (info->strict & (1UL << j)) {
+                    break;
+                }
+            }
+            if (j < info->arity) {
+                f->n = j;
+                o = W(args)[1 + j].p;
+                goto enter;
+            }
+            f->n = info->arity;
+            o = call_prim(info, args);
+            sp--;
+            goto enter;
+        }
+        }
+    }
+}
+
+/* --- Setup and entry ---------------------------------------------------- */
+
+static void init_small_values(void)
+{
+    long i;
+    for (i = -16; i < 256; i++) {
+        Obj *o = alloc_static(O_INT, 1);
+        W(o)[0].i = i;
+        small_ints[i + 16] = o;
+    }
+    for (i = 0; i < 256; i++) {
+        Obj *o = alloc_static(O_CHAR, 1);
+        W(o)[0].u = (unsigned long)i;
+        small_chars[i] = o;
+    }
+}
+
+/* One heap object for every global: a primitive, a closure, a nullary
+ * constructor, or a thunk for a constant applicative form. */
+/* Whether a global's body is built directly. A body that names other
+ * globals becomes a thunk, because their objects may not exist yet. */
+static int direct_global(const Core *body)
+{
+    switch (body->kind) {
+    case CORE_INT:
+    case CORE_CHAR:
+    case CORE_STR:
+    case CORE_LAM:
+        return 1;
+    case CORE_CON:
+        return body->args.len == 0;
+    default:
+        return 0;
+    }
+}
+
+static void init_globals(void)
+{
+    size_t i;
+    unsigned long words = 0;
+    for (i = 0; i < prog->globals.len; i++) {
+        const Global *g = (const Global *)prog->globals.items[i];
+        if (g->prim == NULL) {
+            words += direct_global(g->body) ? atom_size(g->body) : 3;
+        }
+    }
+    reserve(words);
+    for (i = 0; i < prog->globals.len; i++) {
+        Global *g = (Global *)prog->globals.items[i];
+        if (g->prim != NULL) {
+            Obj *o = alloc_static(O_PRIM, 1);
+            W(o)[0].c = g->prim;
+            g->value = o;
+        } else if (direct_global(g->body)) {
+            g->value = atom(g->body, NULL);
+        } else {
+            Obj *o = alloc(O_THUNK, 2);
+            W(o)[0].c = g->body;
+            W(o)[1].p = NULL;
+            g->value = o;
+        }
+    }
+}
+
+char *eval_run(CoreProgram *program)
+{
+    Obj *result;
+    const char *heap_env = getenv("AIHC_BOOT_HEAP");
+    prog = program;
+    /* The initial heap in words. AIHC_BOOT_HEAP overrides it, so the
+     * tests can force frequent collections. */
+    heap_size = 1UL << 20;
+    if (heap_env != NULL && atol(heap_env) >= 1024) {
+        heap_size = (unsigned long)atol(heap_env);
+    }
+    heap = (Word *)xmalloc(heap_size * sizeof(Word));
+    heap_end = heap + heap_size;
+    hp = heap;
+    init_small_values();
+    init_globals();
+    /* main is an IO action: a function from the world to `IORes a`. The
+     * world is the unit value. */
+    {
+        Vec none;
+        Core *app;
+        Obj *start;
+        vec_init(&none);
+        app = core_app1(core_global(prog->main), core_con(prog->con_unit, &none));
+        reserve(3);
+        start = alloc(O_THUNK, 2);
+        W(start)[0].c = app;
+        W(start)[1].p = NULL;
+        result = run(start);
+    }
+    fflush(stdout);
+    if (KIND(result) != O_CON || (const ConInfo *)W(result)[0].c != prog->con_iores) {
+        return xstrdup("main did not return an IO result");
+    }
+    return NULL;
+}

@@ -52,6 +52,8 @@ static void locals_push(LocalVec *v, const char *name, unsigned long id)
 
 typedef struct {
     const Program *program;
+    /* The name of the module. */
+    const char *module;
     /* The top-level scope of the module. */
     const Scope *scope;
     /* The local term names in scope, innermost last. */
@@ -398,6 +400,12 @@ static ResolveError *top_decl(Resolver *r, const Decl *decl)
         return ty(r, decl->ty);
     case DECL_FIXITY:
         return NULL;
+    case DECL_FOREIGN:
+        /* As in aihc-resolve, the binder's span starts where the
+         * declaration starts. */
+        emit(r, narrow(decl->pos, decl->name.name), NS_TERM,
+             lookup_top(r, SPACE_TERM, decl->name.name));
+        return ty(r, decl->ty);
     case DECL_BIND:
         return top_bind(r, decl->pos, &decl->lhs, decl->rhs, NULL, 0);
     case DECL_DATA:
@@ -712,6 +720,29 @@ static ResolveError *pat(Resolver *r, const Pat *p, LocalVec *bound)
             return e;
         }
         return ty(r, p->ty);
+    case PAT_LIT:
+        /* As for a literal expression, plus the `==` of the comparison
+         * and the `negate` of a negative literal. A character or string
+         * literal has no annotation without OverloadedStrings. */
+        if (p->lit.kind == LIT_INTEGER || p->lit.kind == LIT_FLOAT) {
+            const char *conversion = p->lit.kind == LIT_INTEGER ? "fromInteger"
+                                                                : "fromRational";
+            if (p->lit.kind == LIT_INTEGER) {
+                Target integer = program_builtin(r->program, r->module, SPACE_TYPE, "Integer");
+                if (integer.kind != TARGET_ERROR) {
+                    emit(r, span(p->span), NS_TYPE, integer);
+                }
+            }
+            emit(r, span(p->span), NS_TERM,
+                 program_builtin(r->program, r->module, SPACE_TERM, conversion));
+            if (p->negative) {
+                emit(r, span(p->span), NS_TERM,
+                     program_builtin(r->program, r->module, SPACE_TERM, "negate"));
+            }
+            emit(r, span(p->span), NS_TERM,
+                 program_builtin(r->program, r->module, SPACE_TERM, "=="));
+        }
+        return NULL;
     default:
         return unsupported("this pattern", NULL);
     }
@@ -779,10 +810,42 @@ static ResolveError *expr(Resolver *r, const Expr *x)
                                           : lookup_q(r, SPACE_TERM, &x->name));
         return NULL;
     case EXPR_LIT:
-        if (x->lit.kind == LIT_CHAR) {
-            return NULL;
+        /* A numeric literal applies a syntax term from the builtin
+         * modules: `fromInteger` or `fromRational`. An integer literal
+         * also names the `Integer` type when a builtin module exports
+         * it. A string literal keeps its type: the resolver does not
+         * handle OverloadedStrings yet. */
+        if (x->lit.kind == LIT_INTEGER) {
+            Target integer = program_builtin(r->program, r->module, SPACE_TYPE, "Integer");
+            if (integer.kind != TARGET_ERROR) {
+                emit(r, span(x->span), NS_TYPE, integer);
+            }
+            emit(r, span(x->span), NS_TERM,
+                 program_builtin(r->program, r->module, SPACE_TERM, "fromInteger"));
+        } else if (x->lit.kind == LIT_FLOAT) {
+            emit(r, span(x->span), NS_TERM,
+                 program_builtin(r->program, r->module, SPACE_TERM, "fromRational"));
         }
-        return unsupported("this expression", NULL);
+        return NULL;
+    case EXPR_IF:
+        if ((e = expr(r, x->a)) != NULL) {
+            return e;
+        }
+        if ((e = expr(r, x->b)) != NULL) {
+            return e;
+        }
+        return expr(r, x->c);
+    case EXPR_LIST:
+    case EXPR_TUPLE:
+        /* The list and tuple constructors are syntax, reported at the
+         * span of the whole expression. */
+        for (i = 0; i < x->items.len; i++) {
+            if ((e = expr(r, (const Expr *)x->items.items[i])) != NULL) {
+                return e;
+            }
+        }
+        emit(r, span(x->span), NS_TERM, target_syntax());
+        return NULL;
     case EXPR_APP:
         if ((e = expr(r, x->a)) != NULL) {
             return e;
@@ -855,6 +918,7 @@ static ResolveError *expr(Resolver *r, const Expr *x)
 static ResolveError *ty(Resolver *r, const Type *t)
 {
     ResolveError *e;
+    size_t i;
     switch (t->kind) {
     case TY_VAR:
     case TY_WILDCARD:
@@ -879,6 +943,14 @@ static ResolveError *ty(Resolver *r, const Type *t)
     case TY_LIST:
         emit(r, span(t->span), NS_TYPE, target_syntax());
         return ty(r, t->a);
+    case TY_TUPLE:
+        for (i = 0; i < t->items.len; i++) {
+            if ((e = ty(r, (const Type *)t->items.items[i])) != NULL) {
+                return e;
+            }
+        }
+        emit(r, span(t->span), NS_TYPE, target_syntax());
+        return NULL;
     case TY_PAREN:
         if (t->a->kind == TY_OP) {
             /* The operator of an infix type has the span of the
@@ -938,6 +1010,7 @@ ResolveError *resolve_module(const Program *p, const char *path, OccVec *out)
     }
     memset(&r, 0, sizeof r);
     r.program = p;
+    r.module = module->name;
     r.scope = program_scope(p, module->name, &e);
     if (r.scope == NULL) {
         return e;
