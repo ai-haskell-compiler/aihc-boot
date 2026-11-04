@@ -548,7 +548,7 @@ static void d_type(Dbg *d, const void *x)
         d_tuple2(d, "List", d_type, t->a, v_span, &t->span);
         break;
     case TY_TUPLE:
-        d_tuple1(d, "Tuple", v_types, &t->items);
+        d_tuple1(d, t->unboxed ? "UnboxedTuple" : "Tuple", v_types, &t->items);
         break;
     case TY_PAREN:
         d_tuple2(d, "Paren", d_type, t->a, v_span, &t->span);
@@ -679,6 +679,16 @@ static void d_con_decl(Dbg *d, const void *x)
         d_end(d);
         d_field(d, "fields");
         d_vec(d, &c->fields, d_field_decl);
+        d_end(d);
+        d_close(d, '}');
+        break;
+    case CON_GADT:
+        d_open(d, "Gadt", '{');
+        d_field(d, "names");
+        d_vec(d, &c->names, d_ident);
+        d_end(d);
+        d_field(d, "ty");
+        d_type(d, c->ty);
         d_end(d);
         d_close(d, '}');
         break;
@@ -954,6 +964,54 @@ static void d_decl(Dbg *d, const void *x)
         d_option(d, decl->kind_sig, d_type);
         d_end(d);
         break;
+    case DECL_DATA_FAMILY:
+        d_decl_open(d, "DataFamily", decl);
+        d_field(d, "name");
+        d_ident(d, &decl->name);
+        d_end(d);
+        d_field(d, "vars");
+        d_vec(d, &decl->vars, d_tyvarbind);
+        d_end(d);
+        d_field(d, "kind");
+        d_option(d, decl->kind_sig, d_type);
+        d_end(d);
+        break;
+    case DECL_DATA_INSTANCE:
+        d_decl_open(d, "DataInstance", decl);
+        d_field(d, "newtype");
+        d_bool(d, decl->newtype);
+        d_end(d);
+        d_field(d, "lhs");
+        d_type(d, decl->lhs_ty);
+        d_end(d);
+        d_field(d, "kind");
+        d_option(d, decl->kind_sig, d_type);
+        d_end(d);
+        d_field(d, "cons");
+        d_vec(d, &decl->cons, d_con_decl);
+        d_end(d);
+        d_field(d, "deriving");
+        d_vec(d, &decl->deriving, d_deriving);
+        d_end(d);
+        break;
+    case DECL_ROLE:
+        d_decl_open(d, "Role", decl);
+        d_field(d, "name");
+        d_ident(d, &decl->name);
+        d_end(d);
+        d_field(d, "roles");
+        d_vec(d, &decl->strs, v_str);
+        d_end(d);
+        break;
+    case DECL_DERIVING:
+        d_decl_open(d, "StandaloneDeriving", decl);
+        d_field(d, "deriving");
+        d_vec(d, &decl->deriving, d_deriving);
+        d_end(d);
+        d_field(d, "head");
+        d_type(d, decl->ty);
+        d_end(d);
+        break;
     case DECL_TYPE_INSTANCE:
         d_decl_open(d, "TypeInstance", decl);
         d_field(d, "lhs");
@@ -1109,7 +1167,7 @@ static void d_pat(Dbg *d, const void *x)
         d_close(d, '}');
         break;
     case PAT_TUPLE:
-        d_tuple1(d, "Tuple", v_pats, &p->args);
+        d_tuple1(d, p->unboxed ? "UnboxedTuple" : "Tuple", v_pats, &p->args);
         break;
     case PAT_LIST:
         d_tuple1(d, "List", v_pats, &p->args);
@@ -1284,7 +1342,7 @@ static void d_expr(Dbg *d, const void *x)
         d_tuple1(d, "Do", v_stmts, &e->stmts);
         break;
     case EXPR_TUPLE:
-        d_tuple1(d, "Tuple", v_exprs, &e->items);
+        d_tuple1(d, e->unboxed ? "UnboxedTuple" : "Tuple", v_exprs, &e->items);
         break;
     case EXPR_TUPLE_SECTION:
         d_tuple1(d, "TupleSection", v_section_items, &e->items);

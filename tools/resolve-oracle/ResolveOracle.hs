@@ -32,8 +32,10 @@ module Main (main) where
 
 import Aihc.Parser (ParserConfig (..), defaultConfig, parseModule)
 import Aihc.Parser.Syntax
-  ( ExtensionSetting (..),
+  ( Decl (..),
+    ExtensionSetting (..),
     LanguageEdition (..),
+    Module (..),
     ModuleHeaderPragmas (..),
     Name (..),
     SourceSpan,
@@ -176,8 +178,17 @@ parseFile pkg package path = do
     ParsedModule
       { parsedPath = path,
         parsedErrors = [renderSpan sp <> ": " <> T.unpack message | (sp, message) <- errors],
-        parsedUnit = ModuleUnit pkg extensions modu
+        parsedUnit = ModuleUnit pkg extensions (stripRules modu)
       }
+
+-- | aihc-boot ignores pragmas, and RULES is a pragma. Remove the rules,
+-- so that the oracle does not resolve the names in them.
+stripRules :: Module -> Module
+stripRules modu = modu {moduleDecls = filter (not . isRules) (moduleDecls modu)}
+  where
+    isRules (DeclAnn _ decl) = isRules decl
+    isRules (DeclRules _) = True
+    isRules _ = False
 
 -- | Resolve one module on its own. The exports of the whole package are
 -- already known, so the module's siblings are in scope. A module of its

@@ -648,6 +648,9 @@ static void declare_cons(Tc *tc, const Decl *d, TcTyCon *t)
             vec_push(&con->fields, conv(tc, c->right.ty, &env));
             vec_push(&con->field_names, NULL);
             break;
+        case CON_GADT:
+            tc_fail(tc, xstrdup("a GADT constructor is not supported yet"));
+            break;
         case CON_RECORD:
             con->name = c->name.name;
             for (j = 0; j < c->fields.len; j++) {

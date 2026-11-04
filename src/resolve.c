@@ -323,6 +323,8 @@ static ResolveError *data_decl(Resolver *r, const Decl *decl)
             return e;
         }
         switch (con->kind) {
+        case CON_GADT:
+            return unsupported("a GADT constructor", &con->pos);
         case CON_PREFIX:
             if (str_eq(con->name.name, "[]")) {
                 emit(r, span(con->name.span), NS_TERM, target_syntax());
@@ -441,6 +443,9 @@ static ResolveError *top_decl(Resolver *r, const Decl *decl)
     case DECL_TYPE_FAMILY: {
         /* The record spans the head: the name and its variables. */
         Span head;
+        if (decl->result != NULL) {
+            return unsupported("an injectivity annotation", &decl->pos);
+        }
         head.start = decl->name.span.start;
         head.end = decl->name.span.end;
         for (i = 0; i < decl->vars.len; i++) {
@@ -457,6 +462,9 @@ static ResolveError *top_decl(Resolver *r, const Decl *decl)
         return NULL;
     }
     case DECL_CLASS:
+        if (decl->fundeps.len > 0) {
+            return unsupported("a functional dependency", &decl->pos);
+        }
         emit(r, narrow(after(decl->pos, "class "), decl->name.name), NS_TYPE,
              lookup_top(r, SPACE_TYPE, decl->name.name));
         if (decl->ctx != NULL && (e = context(r, decl->ctx)) != NULL) {
@@ -807,6 +815,9 @@ static ResolveError *pat(Resolver *r, const Pat *p, LocalVec *bound)
         return NULL;
     case PAT_TUPLE:
     case PAT_LIST:
+        if (p->unboxed) {
+            return unsupported("an unboxed tuple pattern", NULL);
+        }
         for (i = 0; i < p->args.len; i++) {
             if ((e = pat(r, (const Pat *)p->args.items[i], bound)) != NULL) {
                 return e;
@@ -969,6 +980,9 @@ static ResolveError *expr(Resolver *r, const Expr *x)
         return expr(r, x->c);
     case EXPR_LIST:
     case EXPR_TUPLE:
+        if (x->unboxed) {
+            return unsupported("an unboxed tuple", &x->span.start);
+        }
         /* The list and tuple constructors are syntax, reported at the
          * span of the whole expression. */
         for (i = 0; i < x->items.len; i++) {
@@ -1281,6 +1295,9 @@ static ResolveError *ty(Resolver *r, const Type *t)
         emit(r, span(t->span), NS_TYPE, target_syntax());
         return ty(r, t->a);
     case TY_TUPLE:
+        if (t->unboxed) {
+            return unsupported("an unboxed tuple type", &t->span.start);
+        }
         for (i = 0; i < t->items.len; i++) {
             if ((e = ty(r, (const Type *)t->items.items[i])) != NULL) {
                 return e;

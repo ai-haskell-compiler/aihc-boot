@@ -401,9 +401,9 @@ static void pr_ty(StrBuf *out, const Type *t)
         sb_puts(out, "]");
         break;
     case TY_TUPLE:
-        sb_puts(out, "(");
+        sb_puts(out, t->unboxed ? "(# " : "(");
         pr_types(out, &t->items, ", ");
-        sb_puts(out, ")");
+        sb_puts(out, !t->unboxed ? ")" : t->items.len > 0 ? " #)" : "#)");
         break;
     case TY_PAREN:
         sb_puts(out, "(");
@@ -480,6 +480,46 @@ static void pr_decl_block(StrBuf *out, const Vec *decls)
 static void pr_lhs(StrBuf *out, const Lhs *lhs);
 static void pr_rhs(StrBuf *out, const Rhs *rhs, const char *sep);
 
+/* Append each string with a leading space. */
+static void pr_words(StrBuf *out, const Vec *words)
+{
+    size_t i;
+
+    for (i = 0; i < words->len; i++) {
+        sb_puts(out, " ");
+        sb_puts(out, words->items[i]);
+    }
+}
+
+/* The constructors and the deriving clauses of a data declaration or a
+ * data instance. */
+static void pr_data_body(StrBuf *out, const Decl *d)
+{
+    size_t i;
+
+    if (d->gadt) {
+        sb_puts(out, " where {");
+        for (i = 0; i < d->cons.len; i++) {
+            const ConDecl *c = d->cons.items[i];
+
+            if (i > 0)
+                sb_puts(out, ";");
+            sb_puts(out, "\n  ");
+            ident_names(out, &c->names);
+            sb_puts(out, " :: ");
+            pr_ty(out, c->ty);
+        }
+        sb_puts(out, "}");
+    } else {
+        for (i = 0; i < d->cons.len; i++) {
+            sb_puts(out, i == 0 ? " = " : " | ");
+            pr_con_decl(out, d->cons.items[i]);
+        }
+    }
+    for (i = 0; i < d->deriving.len; i++)
+        pr_deriving(out, d->deriving.items[i]);
+}
+
 static void pr_decl(StrBuf *out, const Decl *d)
 {
     size_t i;
@@ -545,13 +585,59 @@ static void pr_decl(StrBuf *out, const Decl *d)
             sb_puts(out, " :: ");
             pr_ty(out, d->kind_sig);
         }
-        for (i = 0; i < d->cons.len; i++) {
-            sb_puts(out, i == 0 ? " = " : " | ");
-            pr_con_decl(out, d->cons.items[i]);
-        }
-        for (i = 0; i < d->deriving.len; i++)
-            pr_deriving(out, d->deriving.items[i]);
+        pr_data_body(out, d);
         break;
+    case DECL_DATA_FAMILY:
+        sb_puts(out, d->keyword ? "data family " : "data ");
+        sb_puts(out, d->name.name);
+        pr_binders(out, &d->vars);
+        if (d->kind_sig) {
+            sb_puts(out, " :: ");
+            pr_ty(out, d->kind_sig);
+        }
+        break;
+    case DECL_DATA_INSTANCE:
+        sb_puts(out, d->newtype ? "newtype " : "data ");
+        if (d->keyword)
+            sb_puts(out, "instance ");
+        pr_ty(out, d->lhs_ty);
+        if (d->kind_sig) {
+            sb_puts(out, " :: ");
+            pr_ty(out, d->kind_sig);
+        }
+        pr_data_body(out, d);
+        break;
+    case DECL_ROLE:
+        sb_puts(out, "type role ");
+        var_name(out, "", d->name.name);
+        pr_words(out, &d->strs);
+        break;
+    case DECL_DERIVING: {
+        const Deriving *dv = d->deriving.items[0];
+
+        sb_puts(out, "deriving ");
+        switch (dv->strategy) {
+        case STRATEGY_STOCK:
+            sb_puts(out, "stock ");
+            break;
+        case STRATEGY_ANYCLASS:
+            sb_puts(out, "anyclass ");
+            break;
+        case STRATEGY_NEWTYPE:
+            sb_puts(out, "newtype ");
+            break;
+        case STRATEGY_NONE:
+            break;
+        }
+        if (dv->via) {
+            sb_puts(out, "via ");
+            pr_ty(out, dv->via);
+            sb_puts(out, " ");
+        }
+        sb_puts(out, "instance ");
+        pr_ty(out, d->ty);
+        break;
+    }
     case DECL_TYPE_SYN:
         sb_puts(out, "type ");
         sb_puts(out, d->name.name);
@@ -566,6 +652,18 @@ static void pr_decl(StrBuf *out, const Decl *d)
         if (d->kind_sig) {
             sb_puts(out, " :: ");
             pr_ty(out, d->kind_sig);
+        }
+        if (d->result) {
+            Vec result;
+
+            vec_init(&result);
+            vec_push(&result, d->result);
+            sb_puts(out, " =");
+            pr_binders(out, &result);
+            sb_puts(out, " | ");
+            sb_puts(out, d->result->name.name);
+            sb_puts(out, " ->");
+            pr_words(out, &d->injective);
         }
         break;
     case DECL_TYPE_INSTANCE:
@@ -582,6 +680,14 @@ static void pr_decl(StrBuf *out, const Decl *d)
         }
         sb_puts(out, d->name.name);
         pr_binders(out, &d->vars);
+        for (i = 0; i < d->fundeps.len; i++) {
+            const FunDep *fd = d->fundeps.items[i];
+
+            sb_puts(out, i == 0 ? " |" : ",");
+            pr_words(out, &fd->from);
+            sb_puts(out, " ->");
+            pr_words(out, &fd->to);
+        }
         pr_body(out, &d->body);
         break;
     case DECL_INSTANCE:
@@ -799,9 +905,9 @@ static void pr_pat(StrBuf *out, const Pat *p)
         sb_puts(out, "}");
         break;
     case PAT_TUPLE:
-        sb_puts(out, "(");
+        sb_puts(out, p->unboxed ? "(# " : "(");
         pr_pats(out, &p->args);
-        sb_puts(out, ")");
+        sb_puts(out, !p->unboxed ? ")" : p->args.len > 0 ? " #)" : "#)");
         break;
     case PAT_LIST:
         sb_puts(out, "[");
@@ -987,9 +1093,9 @@ static void pr_exp(StrBuf *out, const Expr *e)
         sb_puts(out, "}");
         break;
     case EXPR_TUPLE:
-        sb_puts(out, "(");
+        sb_puts(out, e->unboxed ? "(# " : "(");
         pr_exps(out, &e->items);
-        sb_puts(out, ")");
+        sb_puts(out, !e->unboxed ? ")" : e->items.len > 0 ? " #)" : "#)");
         break;
     case EXPR_TUPLE_SECTION:
         sb_puts(out, "(");
@@ -1106,6 +1212,11 @@ static void pr_con_decl(StrBuf *out, const ConDecl *c)
         sb_puts(out, c->name.name);
         sb_puts(out, " ");
         pr_bang_type(out, &c->right);
+        break;
+    case CON_GADT:
+        ident_names(out, &c->names);
+        sb_puts(out, " :: ");
+        pr_ty(out, c->ty);
         break;
     case CON_RECORD:
         sb_puts(out, c->name.name);

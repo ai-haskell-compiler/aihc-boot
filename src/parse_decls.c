@@ -671,12 +671,102 @@ static int deriving_clauses(Parser *p, Vec *clauses)
     return 0;
 }
 
-static Decl *data_decl(Parser *p, int newtype)
+/* A constructor in GADT syntax: `C, D :: t`. */
+static void *gadt_con(Parser *p, void *env)
 {
-    Decl *d = decl_new(DECL_DATA, p_pos(p));
+    ConDecl *c = (ConDecl *)xcalloc(1, sizeof(ConDecl));
+    (void)env;
+    c->pos = p_pos(p);
+    c->kind = CON_GADT;
+    for (;;) {
+        QName *op = p_parenthesized_name(p);
+        Ident *name;
+        if (op != NULL) {
+            name = ident_new(op->name, op->span);
+        } else if ((name = conid(p)) == NULL) {
+            return NULL;
+        }
+        vec_push(&c->names, name);
+        if (!p_eat_special(p, ',')) {
+            break;
+        }
+    }
+    if (p_expect_op(p, OP_DOUBLECOLON, "`::`") != 0) {
+        return NULL;
+    }
+    c->ty = p_ty(p);
+    return c->ty ? c : NULL;
+}
+
+/* The constructors of a data declaration or a data instance: `= C | D`,
+ * or a `where` block in GADT syntax. Then the deriving clauses. */
+static Decl *data_body(Parser *p, Decl *d)
+{
+    if (p_eat_op(p, OP_EQUALS)) {
+        for (;;) {
+            ConDecl *c = con_decl(p);
+            if (c == NULL) {
+                return NULL;
+            }
+            vec_push(&d->cons, c);
+            if (!p_eat_op(p, OP_BAR)) {
+                break;
+            }
+        }
+    } else if (p_eat_keyword(p, KW_WHERE)) {
+        d->gadt = 1;
+        if (p_block(p, gadt_con, NULL, &d->cons) != 0) {
+            return NULL;
+        }
+    }
+    return deriving_clauses(p, &d->deriving) == 0 ? d : NULL;
+}
+
+static Decl *data_decl(Parser *p, int newtype, DeclContext ctx)
+{
+    Pos pos = p_pos(p);
+    Decl *d = decl_new(DECL_DATA, pos);
     QName *pname;
+    int family_kw, instance_kw;
     d->newtype = newtype;
     p_bump(p);
+    family_kw = !newtype && p_eat_varid(p, "family");
+    instance_kw = !family_kw && p_eat_keyword(p, KW_INSTANCE);
+    if (family_kw || ctx == CTX_CLASS) {
+        Ident *name = conid(p);
+        if (name == NULL) {
+            return NULL;
+        }
+        d = decl_new(DECL_DATA_FAMILY, pos);
+        d->keyword = family_kw;
+        d->name = *name;
+        if (p_ty_var_binds(p, &d->vars) != 0) {
+            return NULL;
+        }
+        if (p_eat_op(p, OP_DOUBLECOLON)) {
+            d->kind_sig = p_ty(p);
+            if (d->kind_sig == NULL) {
+                return NULL;
+            }
+        }
+        return d;
+    }
+    if (instance_kw || ctx == CTX_INSTANCE) {
+        d = decl_new(DECL_DATA_INSTANCE, pos);
+        d->newtype = newtype;
+        d->keyword = instance_kw;
+        d->lhs_ty = p_btype(p);
+        if (d->lhs_ty == NULL) {
+            return NULL;
+        }
+        if (p_eat_op(p, OP_DOUBLECOLON)) {
+            d->kind_sig = p_ty(p);
+            if (d->kind_sig == NULL) {
+                return NULL;
+            }
+        }
+        return data_body(p, d);
+    }
     /* A type operator in prefix form: `data (:+:) f g p`. */
     pname = p_parenthesized_name(p);
     if (pname != NULL) {
@@ -702,19 +792,7 @@ static Decl *data_decl(Parser *p, int newtype)
             return NULL;
         }
     }
-    if (p_eat_op(p, OP_EQUALS)) {
-        for (;;) {
-            ConDecl *c = con_decl(p);
-            if (c == NULL) {
-                return NULL;
-            }
-            vec_push(&d->cons, c);
-            if (!p_eat_op(p, OP_BAR)) {
-                break;
-            }
-        }
-    }
-    return deriving_clauses(p, &d->deriving) == 0 ? d : NULL;
+    return data_body(p, d);
 }
 
 /* --- type -------------------------------------------------------------- */
@@ -728,6 +806,31 @@ static Decl *type_decl(Parser *p, DeclContext ctx)
     Decl *d;
     Ident *name;
     p_bump(p);
+    if (p_at_varid(p, "role")) {
+        QName *op;
+        p_bump(p);
+        d = decl_new(DECL_ROLE, pos);
+        op = p_parenthesized_name(p);
+        if (op != NULL) {
+            d->name.name = op->name;
+            d->name.span = op->span;
+        } else if ((name = conid(p)) != NULL) {
+            d->name = *name;
+        } else {
+            return NULL;
+        }
+        for (;;) {
+            const Token *t = p_peek(p);
+            if (t->kind == TOK_VARID && t->qual[0] == '\0') {
+                vec_push(&d->strs, xstrdup(t->text));
+            } else if (t->kind == TOK_KEYWORD && t->ch == KW_UNDERSCORE) {
+                vec_push(&d->strs, xstrdup("_"));
+            } else {
+                return d;
+            }
+            p_bump(p);
+        }
+    }
     family_kw = p_eat_varid(p, "family");
     instance_kw = p_eat_keyword(p, KW_INSTANCE);
     if (instance_kw || ctx == CTX_INSTANCE) {
@@ -755,6 +858,26 @@ static Decl *type_decl(Parser *p, DeclContext ctx)
             d->kind_sig = p_ty(p);
             if (d->kind_sig == NULL) {
                 return NULL;
+            }
+        } else if (p_eat_op(p, OP_EQUALS)) {
+            /* An injectivity annotation: `= r | r -> a b`. */
+            Vec result;
+            Ident *r;
+            if (p_ty_var_binds(p, &result) != 0) {
+                return NULL;
+            }
+            if (result.len != 1) {
+                p_unexpected(p, "a result variable");
+                return NULL;
+            }
+            d->result = (TyVarBind *)result.items[0];
+            if (p_expect_op(p, OP_BAR, "`|`") != 0 || (r = p_varid(p)) == NULL
+                || p_expect_op(p, OP_RIGHTARROW, "`->`") != 0) {
+                return NULL;
+            }
+            while (p_kind(p) == TOK_VARID && p_peek(p)->qual[0] == '\0') {
+                vec_push(&d->injective, xstrdup(p_peek(p)->text));
+                p_bump(p);
             }
         }
         return d;
@@ -787,6 +910,27 @@ static Decl *class_decl(Parser *p)
     if (p_ty_var_binds(p, &d->vars) != 0) {
         return NULL;
     }
+    /* Functional dependencies: `| a b -> c, d -> e`. */
+    if (p_eat_op(p, OP_BAR)) {
+        for (;;) {
+            FunDep *fd = (FunDep *)xcalloc(1, sizeof(FunDep));
+            while (p_kind(p) == TOK_VARID && p_peek(p)->qual[0] == '\0') {
+                vec_push(&fd->from, xstrdup(p_peek(p)->text));
+                p_bump(p);
+            }
+            if (p_expect_op(p, OP_RIGHTARROW, "`->`") != 0) {
+                return NULL;
+            }
+            while (p_kind(p) == TOK_VARID && p_peek(p)->qual[0] == '\0') {
+                vec_push(&fd->to, xstrdup(p_peek(p)->text));
+                p_bump(p);
+            }
+            vec_push(&d->fundeps, fd);
+            if (!p_eat_special(p, ',')) {
+                break;
+            }
+        }
+    }
     return where_decls(p, CTX_CLASS, &d->body) == 0 ? d : NULL;
 }
 
@@ -801,6 +945,32 @@ static Decl *instance_decl(Parser *p)
     return where_decls(p, CTX_INSTANCE, &d->body) == 0 ? d : NULL;
 }
 
+/* `deriving [STRATEGY] instance t` and `deriving via t instance t`. */
+static Decl *standalone_deriving(Parser *p)
+{
+    Decl *d = decl_new(DECL_DERIVING, p_pos(p));
+    Deriving *dv = (Deriving *)xcalloc(1, sizeof(Deriving));
+    p_bump(p);
+    if (p_eat_varid(p, "stock")) {
+        dv->strategy = STRATEGY_STOCK;
+    } else if (p_eat_varid(p, "anyclass")) {
+        dv->strategy = STRATEGY_ANYCLASS;
+    } else if (p_eat_keyword(p, KW_NEWTYPE)) {
+        dv->strategy = STRATEGY_NEWTYPE;
+    } else if (p_eat_varid(p, "via")) {
+        dv->via = p_atype(p);
+        if (dv->via == NULL) {
+            return NULL;
+        }
+    }
+    vec_push(&d->deriving, dv);
+    if (p_expect_keyword(p, KW_INSTANCE) != 0) {
+        return NULL;
+    }
+    d->ty = p_ty(p);
+    return d->ty ? d : NULL;
+}
+
 Decl *p_decl(Parser *p, DeclContext ctx)
 {
     Pos pos = p_pos(p);
@@ -808,9 +978,9 @@ Decl *p_decl(Parser *p, DeclContext ctx)
     if (t->kind == TOK_KEYWORD) {
         switch (t->ch) {
         case KW_DATA:
-            return data_decl(p, 0);
+            return data_decl(p, 0, ctx);
         case KW_NEWTYPE:
-            return data_decl(p, 1);
+            return data_decl(p, 1, ctx);
         case KW_TYPE:
             return type_decl(p, ctx);
         case KW_CLASS:
@@ -822,8 +992,7 @@ Decl *p_decl(Parser *p, DeclContext ctx)
         case KW_INFIXR:
             return fixity(p);
         case KW_DERIVING:
-            p_error(p, xstrdup("standalone deriving is not supported yet"));
-            return NULL;
+            return standalone_deriving(p);
         case KW_FOREIGN:
             return foreign_decl(p);
         case KW_DEFAULT:
