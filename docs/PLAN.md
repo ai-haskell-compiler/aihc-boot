@@ -91,7 +91,8 @@ at the pinned revision. The larger choices:
 - **Network download, tar and zlib → drop.** aihc-hackage's index
   download does not need to work in a boot build: point aihc at a local
   package directory instead.
-- **stm, async → drop.** A boot-built aihc can build sequentially.
+- **async → drop.** A boot-built aihc can build sequentially. stm stays,
+  because exceptions needs it.
 - **haskeline → drop** (in `build-depends` but never imported), **libffi →
   drop** (only the GRIN interpreter uses it).
 - **The other libraries → simplify, as upstream wrote them.** This
