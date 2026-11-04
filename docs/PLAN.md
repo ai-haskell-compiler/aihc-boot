@@ -404,6 +404,35 @@ that a stage-1 `aihc` compiles hello world against. M7 vendors
 them. `aihc-rts` is the native and wasm runtime for GRIN output, and
 the interpreter does not use it.
 
+### CPP
+
+About one hundred upstream modules use the C preprocessor: `#if`,
+`#include` and `MIN_VERSION_pkg(a,b,c)`. For now, aihc-boot runs clang
+as the preprocessor, as GHC runs `cc -E -undef -traditional`
+(`src/cpp.c`). `AIHC_CPP` overrides the command. A module goes through
+clang when a `LANGUAGE` pragma or the `default-extensions` of its
+package turns on `CPP`. aihc-boot defines the macros that GHC 9.12 and
+Cabal define:
+
+- `__GLASGOW_HASKELL__` (912) and `MIN_VERSION_GLASGOW_HASKELL`.
+- `VERSION_pkg` and `MIN_VERSION_pkg` for the package of the module and
+  its dependencies. A vendored package has the version of its `.cabal`
+  file. base, ghc-prim and the other packages of GHC have the versions
+  of GHC 9.12.
+- The platform macros of the host, such as `darwin_HOST_OS` and
+  `aarch64_HOST_ARCH`.
+- The `cpp-options` and the `include-dirs` of the library in the
+  `.cabal` file.
+
+`cpp/include` has the GHC headers that the vendored code includes:
+`MachDeps.h`, `ghcautoconf.h` and `HsBaseConfig.h`. The preprocessed
+module goes to `build/cpp/PATH`. The lines of the module keep their
+numbers. `aihc-parse` and `resolve-oracle` read the same file, so both
+sides of a comparison see the same source.
+
+A preprocessor in C89 can replace clang later. The vendored `aihc-cpp`
+is the reference for it.
+
 ### C code
 
 Upstream packages call C with `foreign import ccall` and `foreign

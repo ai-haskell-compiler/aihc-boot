@@ -1,0 +1,9 @@
+{-# LANGUAGE CPP #-}
+module Cpp where {
+ghc :: Int;
+ghc = 912;
+base :: Bool;
+base = True;
+four :: Int;
+four = (2 + 2)
+}

@@ -438,6 +438,8 @@ struct Decl {
     Vec cons;       /* ConDecl * */
     Vec deriving;   /* Deriving * */
     Type *lhs_ty;   /* DECL_TYPE_INSTANCE */
+    int keyword;    /* DECL_TYPE_FAMILY, DECL_TYPE_INSTANCE: the source
+                       has `family` or `instance` after `type` */
     Type *ctx;      /* optional: DECL_CLASS */
     Vec body;       /* Decl *: DECL_CLASS, DECL_INSTANCE, and the where
                        block of PATSYN_EXPLICIT */
