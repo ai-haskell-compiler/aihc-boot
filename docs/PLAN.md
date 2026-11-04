@@ -216,7 +216,10 @@ M3–M7 read 0.
   dependency counts only when it is vendored.
 - `aihc-boot run FILE.hs` runs a single-module program against the
   boot `base`, or against PKG and its dependencies for a file in
-  `tests/eval/PKG/`. The eval tests use it. The program's standard input and
+  `tests/eval/PKG/`. The eval tests use it. For a file under
+  `vendor/PKG/`, the file is the main module of an executable of PKG.
+  Thus `aihc-boot run vendor/aihc/exe/Main.hs` runs `aihc`. The
+  program's standard input and
   output are the ones of `aihc-boot`. `AIHC_BOOT_HEAP` sets the initial
   heap in words; the tests use a small value to run the collector
   often.
