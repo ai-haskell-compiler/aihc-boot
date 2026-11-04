@@ -4,7 +4,8 @@
 #
 # plan:
 #   keep      vendor as-is (first-party aihc code; only mechanical edits)
-#   simplify  vendor upstream, then cut it down to the API aihc actually uses
+#   simplify  vendor upstream and keep the code; delete only unused code that
+#             needs an excluded feature (docs/PLAN.md, "Upstream code")
 #   replace   write a small in-tree package with the same name/modules, covering
 #             only the API aihc uses (vendor/<name>/ holds the replacement)
 #   drop      patch the packages in `used_by` so this dependency disappears
