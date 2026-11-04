@@ -194,6 +194,8 @@ const Scope *program_scope(const Program *p, const char *module,
 /* The constructors, fields, methods and associated types of a type or
  * class (Child *). NULL when there are none. */
 const Vec *program_children(const Program *p, const Entity *parent);
+/* Whether an entity is a pattern synonym. */
+int program_is_patsyn(const Program *p, const Entity *e);
 /* The target of a name that desugaring applies without an import, such
  * as `fromInteger` for an integer literal: the name in the exports of the
  * builtin modules. An error target when no builtin module exports it. */
