@@ -626,7 +626,11 @@ static Expr *bracket_exp(Parser *p)
     if (p_eat_op(p, OP_DOTDOT)) {
         r = expr_new(EXPR_ARITH_SEQ);
         r->a = first;
-        return seq_end(p, &r->c) == 0 ? r : NULL;
+        if (seq_end(p, &r->c) != 0) {
+            return NULL;
+        }
+        r->span = p_span_from(p, start);
+        return r;
     }
     if (p_eat_op(p, OP_BAR)) {
         r = expr_new(EXPR_LIST_COMP);
@@ -654,7 +658,11 @@ static Expr *bracket_exp(Parser *p)
             r = expr_new(EXPR_ARITH_SEQ);
             r->a = first;
             r->b = second;
-            return seq_end(p, &r->c) == 0 ? r : NULL;
+            if (seq_end(p, &r->c) != 0) {
+                return NULL;
+            }
+            r->span = p_span_from(p, start);
+            return r;
         }
         vec_push(&r->items, second);
         while (p_eat_special(p, ',')) {

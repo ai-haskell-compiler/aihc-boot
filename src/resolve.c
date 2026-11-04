@@ -544,7 +544,15 @@ static ResolveError *top_decl(Resolver *r, const Decl *decl)
         for (i = 0; i < decl->body.len; i++) {
             const Decl *item = (const Decl *)decl->body.items[i];
             switch (item->kind) {
-            case DECL_TYPE_SIG:
+            case DECL_TYPE_SIG: {
+                /* As in aihc-resolve, the binders of each method signature
+                 * number from zero, as in a class default. */
+                unsigned long saved = r->next_local;
+                r->next_local = 0;
+                e = top_decl(r, item);
+                r->next_local = saved;
+                break;
+            }
             case DECL_TYPE_FAMILY:
                 e = top_decl(r, item);
                 break;
