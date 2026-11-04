@@ -143,19 +143,25 @@ note = "NFData with its Generic default only. Version as in GHC 9.12. Do not re-
 [packages.transformers]
 plan = "simplify"
 source = "hackage"
-used_by = ["aihc", "aihc-tc", "aihc-package-plan"]
-note = "State/Reader/Except/Writer only."
+include = ["transformers.cabal", "LICENSE", "Control", "Data"]
+used_by = ["aihc", "aihc-tc", "aihc-package-plan", "mtl", "megaparsec", "exceptions", "primitive"]
+note = "Version as in GHC 9.12."
+version = "0.6.1.2"
 
 [packages.array]
 plan = "simplify"
 source = "hackage"
-used_by = ["aihc"]
+used_by = ["aihc", "binary", "containers", "stm", "integer-logarithms", "megaparsec", "text"]
+version = "0.5.8.0"
+note = "Version as in GHC 9.12."
 
 [packages.binary]
 plan = "simplify"
 source = "hackage"
-used_by = ["aihc"]
-note = "Interface/cache files and object writing."
+include = ["binary.cabal", "LICENSE", "src"]
+used_by = ["aihc", "scientific", "text"]
+note = "Version as in GHC 9.12."
+version = "0.8.9.3"
 
 [packages.filepath]
 plan = "simplify"
@@ -184,9 +190,11 @@ used_by = ["aihc-hackage", "aihc-package-plan"]
 note = "Only used for timestamps in caches/lock files."
 
 [packages.stm]
-plan = "drop"
-used_by = ["aihc"]
-note = "Parallel build scheduler; boot builds sequentially."
+plan = "simplify"
+used_by = ["aihc", "exceptions"]
+note = "Version as in GHC 9.12. exceptions needs it."
+source = "hackage"
+version = "2.5.3.1"
 
 [packages.async]
 plan = "drop"
@@ -198,12 +206,73 @@ used_by = ["aihc"]
 plan = "simplify"
 source = "hackage"
 used_by = ["aihc", "aihc-parser"]
-note = "Pulls in parser-combinators, mtl, case-insensitive, scientific."
+note = "Version as in the GHC environment of the dev shell."
+version = "9.7.0"
 
 [packages.prettyprinter]
 plan = "simplify"
 source = "hackage"
+include = ["prettyprinter.cabal", "LICENSE.md", "src", "src-text", "misc"]
 used_by = ["aihc", "aihc-parser"]
+version = "1.7.1"
+
+[packages.mtl]
+plan = "simplify"
+source = "hackage"
+version = "2.3.1"
+used_by = ["megaparsec", "exceptions"]
+note = "Version as in GHC 9.12."
+
+[packages.parser-combinators]
+plan = "simplify"
+source = "hackage"
+version = "1.3.1"
+used_by = ["megaparsec"]
+
+[packages.case-insensitive]
+plan = "simplify"
+source = "hackage"
+version = "1.2.1.0"
+used_by = ["megaparsec"]
+
+[packages.scientific]
+plan = "simplify"
+source = "hackage"
+version = "0.3.8.1"
+used_by = ["megaparsec"]
+note = "Remove the Lift instance (Template Haskell)."
+
+[packages.hashable]
+plan = "simplify"
+source = "hackage"
+version = "1.5.1.0"
+used_by = ["case-insensitive", "scientific"]
+
+[packages.integer-logarithms]
+plan = "simplify"
+source = "hackage"
+version = "1.0.5"
+used_by = ["scientific"]
+
+[packages.os-string]
+plan = "simplify"
+source = "hackage"
+version = "2.0.8"
+used_by = ["filepath", "hashable"]
+note = "Version as in GHC 9.12."
+
+[packages.exceptions]
+plan = "simplify"
+source = "hackage"
+version = "0.10.10"
+used_by = ["filepath", "os-string"]
+note = "Version as in GHC 9.12."
+
+[packages.vector-stream]
+plan = "simplify"
+source = "hackage"
+version = "0.1.0.1"
+used_by = ["vector"]
 
 [packages.Cabal-syntax]
 plan = "replace"
@@ -233,13 +302,15 @@ note = "Pure-Haskell SHA-256."
 [packages.vector]
 plan = "simplify"
 source = "hackage"
+include = ["vector.cabal", "LICENSE", "src", "include", "internal/unbox-tuple-instances"]
 used_by = ["aihc"]
-note = "2 importing modules; could become a wrapper over array."
+version = "0.13.2.0"
 
 [packages.primitive]
 plan = "simplify"
 source = "hackage"
-used_by = ["aihc"]
+used_by = ["aihc", "scientific", "vector"]
+version = "0.9.1.0"
 
 [packages.haskeline]
 plan = "drop"

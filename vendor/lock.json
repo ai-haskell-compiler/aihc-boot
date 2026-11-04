@@ -17,6 +17,15 @@
     "upstream_lines": 2376,
     "vendored_at": "2026-09-24"
   },
+  "aihc-hackage": {
+    "source": "git",
+    "url": "https://github.com/ai-haskell-compiler/aihc",
+    "rev": "9512a7ea40cbfe5c1ad0337cecf7d60925bdce05",
+    "subdir": "tooling/aihc-hackage",
+    "upstream_modules": 11,
+    "upstream_lines": 2226,
+    "vendored_at": "2026-11-04"
+  },
   "aihc-package-plan": {
     "source": "git",
     "url": "https://github.com/ai-haskell-compiler/aihc",
@@ -53,6 +62,24 @@
     "upstream_lines": 22234,
     "vendored_at": "2026-09-24"
   },
+  "array": {
+    "source": "hackage",
+    "version": "0.5.8.0",
+    "sha256": "3a022dd6ac608d678f404db0b44fc9849c67dea19702eb3b82f358744f65e66b",
+    "cabal_sha256": "ccbcfb49801de128caf8404bcbad99cd55ccb1b65907bb53910da3d61ec0c39b",
+    "upstream_modules": 15,
+    "upstream_lines": 2620,
+    "vendored_at": "2026-11-04"
+  },
+  "binary": {
+    "source": "hackage",
+    "version": "0.8.9.3",
+    "sha256": "977bc800fb22c85b2c257ef48c9a7236581e859dc76c7e6b7743f6ad55647bef",
+    "cabal_sha256": "8b03c7fd5a7f6803280fba87e38d534beb1dc92fec975de5bd36200633996ef2",
+    "upstream_modules": 9,
+    "upstream_lines": 2820,
+    "vendored_at": "2026-11-04"
+  },
   "bytestring": {
     "source": "hackage",
     "version": "0.12.2.0",
@@ -60,6 +87,15 @@
     "upstream_modules": 32,
     "upstream_lines": 15180,
     "vendored_at": "2026-09-24"
+  },
+  "case-insensitive": {
+    "source": "hackage",
+    "version": "1.2.1.0",
+    "sha256": "296dc17e0c5f3dfb3d82ced83e4c9c44c338ecde749b278b6eae512f1d04e406",
+    "cabal_sha256": "9dfd3171fc7698cf8d931727d3af3a7b389135b583e46b5adac1f9d2026fff61",
+    "upstream_modules": 3,
+    "upstream_lines": 205,
+    "vendored_at": "2026-11-04"
   },
   "containers": {
     "source": "hackage",
@@ -77,6 +113,15 @@
     "upstream_lines": 936,
     "vendored_at": "2026-09-24"
   },
+  "exceptions": {
+    "source": "hackage",
+    "version": "0.10.10",
+    "sha256": "08ff819efe7f6ff4df2eb4319f45071842f450328c84599fc450c0e285acadb1",
+    "upstream_modules": 2,
+    "upstream_lines": 957,
+    "vendored_at": "2026-11-04",
+    "cabal_sha256": "5bec6549400b036085d88486bf1fde83ce51dfb8a1024b86f67678753b5f51c5"
+  },
   "filepath": {
     "source": "hackage",
     "version": "1.5.4.0",
@@ -85,6 +130,96 @@
     "upstream_lines": 3156,
     "vendored_at": "2026-09-24"
   },
+  "hashable": {
+    "source": "hackage",
+    "version": "1.5.1.0",
+    "sha256": "ed0b7c10ce92c9ffe45420dadc38c6d39db486ff3633ff13567cc9f75f79b112",
+    "cabal_sha256": "140fc5adad166f7b527567cbd26ff481e8da4a66bdfc84be3ddf28dbeb66f275",
+    "upstream_modules": 10,
+    "upstream_lines": 1541,
+    "vendored_at": "2026-11-04"
+  },
+  "integer-logarithms": {
+    "source": "hackage",
+    "version": "1.0.5",
+    "sha256": "66dff6f1f778fe1ec689139fe125cd4e6a95643734c651c891eafa2c50669459",
+    "cabal_sha256": "870ce80a2e704f179bcda12ee106389a484100fac1534abfd587aaaa51978e6b",
+    "upstream_modules": 4,
+    "upstream_lines": 510,
+    "vendored_at": "2026-11-04"
+  },
+  "megaparsec": {
+    "source": "hackage",
+    "version": "9.7.0",
+    "sha256": "b9ed423625bf20ae7a72480d40d2dd16018a67e2ec45afb840a3607aa931ec97",
+    "cabal_sha256": "50afa64b166bfb4895e51cc961dd7e63fe4b656f3d32e80a2722918166d07e38",
+    "upstream_modules": 19,
+    "upstream_lines": 5541,
+    "vendored_at": "2026-11-04"
+  },
+  "mtl": {
+    "source": "hackage",
+    "version": "2.3.1",
+    "sha256": "2178f1cb60fe2a4cb780827a2bfbab01b56eed92f7f502dc728fecd9f56cdca7",
+    "cabal_sha256": "5377696d7315e2ef31a8d15d67b22d733c20cac2caf8b26756ff8524c8217e6d",
+    "upstream_modules": 24,
+    "upstream_lines": 2607,
+    "vendored_at": "2026-11-04"
+  },
+  "os-string": {
+    "source": "hackage",
+    "version": "2.0.8",
+    "sha256": "02794279dd30282e7b0d45a860dda50ee26a92b1461f5da4545f62dab4172686",
+    "upstream_modules": 12,
+    "upstream_lines": 3820,
+    "vendored_at": "2026-11-04",
+    "cabal_sha256": "d8b0f9cc3c7efb14c9924699322c8f151f30a65e8845bdf53bd344af47452344"
+  },
+  "parser-combinators": {
+    "source": "hackage",
+    "version": "1.3.1",
+    "sha256": "9c506cc38f9df0fc23a942e739ed1f0799fc6c54515d770de044168ecff740bf",
+    "cabal_sha256": "b0b3ebcdfa8d2e0d83ff7b6fd55df7870d1182bd99ee84145f02cbf81786f8ea",
+    "upstream_modules": 7,
+    "upstream_lines": 1124,
+    "vendored_at": "2026-11-04"
+  },
+  "prettyprinter": {
+    "source": "hackage",
+    "version": "1.7.1",
+    "sha256": "5e6ea6903114fa118fcc359633dfb7ecddecb92c06c853d02a77b72b251f0b45",
+    "cabal_sha256": "9c43c9d8c3cd9f445596e5a2379574bba87f935a4d1fa41b5407ee3cf4edc743",
+    "upstream_modules": 32,
+    "upstream_lines": 3662,
+    "vendored_at": "2026-11-04"
+  },
+  "primitive": {
+    "source": "hackage",
+    "version": "0.9.1.0",
+    "sha256": "44b4de41813c7bc5db8a57f87c3612a069b65086946268ba165097252ebd3d76",
+    "upstream_modules": 14,
+    "upstream_lines": 5044,
+    "vendored_at": "2026-11-04",
+    "cabal_sha256": "756b222c715bc6ef5ba81fa69cdbaa20c5c53beb6f16f174b8bacc93a6d239f0"
+  },
+  "scientific": {
+    "source": "hackage",
+    "version": "0.3.8.1",
+    "sha256": "ad3781be149dfc7936e62eb9c3ad78ded0e9985b4dae16d2f62d9ba957ccdcfe",
+    "upstream_modules": 5,
+    "upstream_lines": 1227,
+    "vendored_at": "2026-11-04",
+    "cabal_sha256": "11b0c3bcc572f08ddcb13bfad94df85e0323f39915e74cae2d7a205c631b4d30"
+  },
+  "stm": {
+    "source": "hackage",
+    "version": "2.5.3.1",
+    "sha256": "ebb0465391edce6787e954bef0d0246ec007b2c9096b7c21ad69ab7d802630e7",
+    "cabal_sha256": "421b57c9cdf55b4977e9445336be3895ba0c8d92b6ec6e474f140e173270d9dd",
+    "upstream_modules": 10,
+    "upstream_lines": 1282,
+    "vendored_at": "2026-11-04"
+  },
   "text": {
     "source": "hackage",
     "version": "2.1.3",
@@ -92,5 +227,32 @@
     "upstream_modules": 60,
     "upstream_lines": 20301,
     "vendored_at": "2026-09-24"
+  },
+  "transformers": {
+    "source": "hackage",
+    "version": "0.6.1.2",
+    "sha256": "3fd85cfb18c40ee59c4a1ecdca12ea25978707da146f3770892ffcd9487e61b5",
+    "cabal_sha256": "a7b171944b027eee6625531195cd6f8939394931df956af9e55b23e82aa66afe",
+    "upstream_modules": 24,
+    "upstream_lines": 5319,
+    "vendored_at": "2026-11-04"
+  },
+  "vector": {
+    "source": "hackage",
+    "version": "0.13.2.0",
+    "sha256": "28f203c786cbf8ac6dc3fea3378ec36f34173d505fb4a1dd60fc8418ad91c423",
+    "upstream_modules": 23,
+    "upstream_lines": 19297,
+    "vendored_at": "2026-11-04",
+    "cabal_sha256": "3ec12de580ee31ceac89b314fd00b5057ed40198c0b3d9e9dafa54c1941e6942"
+  },
+  "vector-stream": {
+    "source": "hackage",
+    "version": "0.1.0.1",
+    "sha256": "d0f507334bdea5431a2f07f525a97f29e76522c32210f5de6d5a2b4f1d42bf7c",
+    "cabal_sha256": "483be6df13c72169a917640589666f9fece7bea9fa13fcd41d052dab37ea289e",
+    "upstream_modules": 1,
+    "upstream_lines": 1448,
+    "vendored_at": "2026-11-04"
   }
 }
