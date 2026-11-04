@@ -42,22 +42,37 @@ TcVal *tc_value(Tc *tc, const char *module, const char *name)
     return (TcVal *)strmap_get(&tc->values, tkey(module, name));
 }
 
-TcTyCon *tc_tuple(Tc *tc, size_t n)
+/* The name of a tuple type: `()`, `(,)`, ..., and for an unboxed tuple
+ * `(# #)`, `(##)`, `(#,#)`, .... */
+static char *tuple_name(size_t n, int unboxed)
 {
     StrBuf b;
-    char *name;
+    size_t i;
+    sb_init(&b);
+    sb_puts(&b, unboxed ? "(#" : "(");
+    if (unboxed && n == 1) {
+        sb_putc(&b, ' ');
+    }
+    for (i = 1; i < n; i++) {
+        sb_putc(&b, ',');
+    }
+    sb_puts(&b, unboxed ? "#)" : ")");
+    return sb_take(&b);
+}
+
+TcTyCon *tc_tuple(Tc *tc, size_t n)
+{
+    return tc_tuple_of(tc, n, 0);
+}
+
+TcTyCon *tc_tuple_of(Tc *tc, size_t n, int unboxed)
+{
+    char *name = tuple_name(n, unboxed);
     TcTyCon *t;
     TcCon *con;
     size_t i;
     Vec fields;
     Vec none;
-    sb_init(&b);
-    sb_putc(&b, '(');
-    for (i = 1; i < n; i++) {
-        sb_putc(&b, ',');
-    }
-    sb_putc(&b, ')');
-    name = sb_take(&b);
     t = (TcTyCon *)strmap_get(&tc->tuples, name);
     if (t != NULL) {
         return t;
@@ -354,7 +369,7 @@ static Ty *conv(Tc *tc, const Type *t, ConvEnv *env)
         for (i = 0; i < t->items.len; i++) {
             vec_push(&items, conv(tc, (const Type *)t->items.items[i], env));
         }
-        return ty_apps(ty_con(tc_tuple(tc, items.len)), &items);
+        return ty_apps(ty_con(tc_tuple_of(tc, items.len, t->unboxed)), &items);
     }
     case TY_FORALL:
         return conv_forall(tc, &t->binders, t->a, env, 1);

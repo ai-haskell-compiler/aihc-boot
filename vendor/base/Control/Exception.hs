@@ -1,3 +1,6 @@
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE UnboxedTuples #-}
+
 -- | Exceptions: raise, catch and clean up.
 --
 -- A handler gets the exceptions of its type: 'catch' selects them with
@@ -53,7 +56,7 @@ try a = catch (a >>= \v -> return (Right v)) (\e -> return (Left e))
 
 -- | Evaluate a value to weak head normal form when the action runs.
 evaluate :: a -> IO a
-evaluate x = IO (\_ -> x `seq` IORes x)
+evaluate x = IO (\s -> x `seq` (# s, x #))
 
 -- | Run the second action when the first one raises an exception, then
 -- raise the exception again.

@@ -37,6 +37,9 @@ struct TypeInfo {
     const char *name;
     Vec cons;
     int newtype; /* the one constructor is erased */
+    int box;     /* a box of a primitive value, such as `I# Int#`: the
+                    constructor is erased as for a newtype, but a match
+                    evaluates the value */
 };
 
 /* A data constructor. */

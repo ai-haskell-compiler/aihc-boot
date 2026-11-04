@@ -420,9 +420,6 @@ instance Ord Word where
   a > b = primWordGt (toWord a) (toWord b)
   a >= b = primWordGe (toWord a) (toWord b)
 
-instance Show Word where
-  showsPrec _ a = showString (primWordShow (toWord a))
-
 instance Num Word where
   a + b = fromWord (primIntAdd (toWord a) (toWord b))
   a - b = fromWord (primIntSub (toWord a) (toWord b))

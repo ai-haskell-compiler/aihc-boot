@@ -58,10 +58,7 @@ instance Ord {t} where
   a > b = {gt} (to{t} a) (to{t} b)
   a >= b = {ge} (to{t} a) (to{t} b)
 
-instance Show {t} where
-  {show}
-
-instance Num {t} where
+{showinst}instance Num {t} where
   a + b = from{t} (primIntAdd (to{t} a) (to{t} b))
   a - b = from{t} (primIntSub (to{t} a) (to{t} b))
   a * b = from{t} (primIntMul (to{t} a) (to{t} b))
@@ -155,6 +152,9 @@ def instance(t, n, signed, declare=True):
         d["show"] = "showsPrec d a = showsPrec d (to%s a)" % t
         d["quot"], d["rem"] = "primIntQuot", "primIntRem"
         d["tointeger"] = "integerFromInt (to%s a)" % t
+    # Show Word is in GHC.Show, as in GHC, so that a program that does not
+    # import GHC.Word has it.
+    d["showinst"] = "" if t == "Word" else "instance Show %s where\n  %s\n\n" % (t, d["show"])
     if signed:
         d["abs"] = "abs a = if a < 0 then negate a else a"
         d["signum"] = "if a < 0 then negate 1 else 1"

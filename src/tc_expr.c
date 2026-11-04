@@ -139,6 +139,8 @@ static TcEv *want1(Tc *tc, const char *module, const char *cls, Ty *t)
     return emit_wanted(tc, pred_new(need_class(tc, module, cls), &args));
 }
 
+static Ty *hash_literal_type(Tc *tc, const Literal *lit);
+
 static Ty *char_type(Tc *tc)
 {
     return need_type(tc, "GHC.Types", "Char");
@@ -620,6 +622,10 @@ static void tc_pat(Tc *tc, const Pat *p, Ty *ty, PatGivens *g)
         return;
     case PAT_LIT:
         set_pos(tc, p->span);
+        if (hash_literal_type(tc, &p->lit) != NULL) {
+            unify(tc, ty, hash_literal_type(tc, &p->lit));
+            return;
+        }
         switch (p->lit.kind) {
         case LIT_INTEGER:
             vec_push(&pnote(p)->evs, want1(tc, "GHC.Classes", "Eq", ty));
@@ -730,7 +736,7 @@ static void tc_pat(Tc *tc, const Pat *p, Ty *ty, PatGivens *g)
         for (i = 0; i < p->args.len; i++) {
             vec_push(&items, ty_meta(tc));
         }
-        unify(tc, ty, ty_apps(ty_con(tc_tuple(tc, p->args.len)), &items));
+        unify(tc, ty, ty_apps(ty_con(tc_tuple_of(tc, p->args.len, p->unboxed)), &items));
         for (i = 0; i < p->args.len; i++) {
             tc_pat(tc, (const Pat *)p->args.items[i], (Ty *)items.items[i], g);
         }
@@ -1075,14 +1081,46 @@ void tc_expr_sigma(Tc *tc, const Expr *e, Ty *sigma)
     }
 }
 
-static Ty *tuple_type(Tc *tc, size_t n, Vec *items)
+static Ty *tuple_type_of(Tc *tc, size_t n, int unboxed, Vec *items)
 {
     size_t i;
     vec_init(items);
     for (i = 0; i < n; i++) {
         vec_push(items, ty_meta(tc));
     }
-    return ty_apps(ty_con(tc_tuple(tc, n)), items);
+    return ty_apps(ty_con(tc_tuple_of(tc, n, unboxed)), items);
+}
+
+static Ty *tuple_type(Tc *tc, size_t n, Vec *items)
+{
+    return tuple_type_of(tc, n, 0, items);
+}
+
+/* The type of a MagicHash literal: `1#` Int#, `1##` Word#, `1.0#`
+ * Float#, `1.0##` Double#, `'c'#` Char# and `"s"#` Addr#. NULL for an
+ * ordinary literal. */
+static Ty *hash_literal_type(Tc *tc, const Literal *lit)
+{
+    size_t n = strlen(lit->raw);
+    int hashes = 0;
+    while (n > 0 && lit->raw[n - 1] == '#') {
+        n--;
+        hashes++;
+    }
+    if (hashes == 0) {
+        return NULL;
+    }
+    switch (lit->kind) {
+    case LIT_INTEGER:
+        return need_type(tc, "GHC.Types", hashes == 2 ? "Word#" : "Int#");
+    case LIT_FLOAT:
+        return need_type(tc, "GHC.Types", hashes == 2 ? "Double#" : "Float#");
+    case LIT_CHAR:
+        return need_type(tc, "GHC.Types", "Char#");
+    case LIT_STRING:
+        return need_type(tc, "GHC.Types", "Addr#");
+    }
+    return NULL;
 }
 
 void tc_expr(Tc *tc, const Expr *e, Ty *expected)
@@ -1095,6 +1133,10 @@ void tc_expr(Tc *tc, const Expr *e, Ty *expected)
         return;
     case EXPR_LIT:
         set_pos(tc, e->span);
+        if (hash_literal_type(tc, &e->lit) != NULL) {
+            unify(tc, expected, hash_literal_type(tc, &e->lit));
+            return;
+        }
         switch (e->lit.kind) {
         case LIT_INTEGER:
             vec_push(&enote(e)->evs, want1(tc, "GHC.Num", "Num", expected));
@@ -1193,7 +1235,7 @@ void tc_expr(Tc *tc, const Expr *e, Ty *expected)
     }
     case EXPR_TUPLE: {
         Vec items;
-        unify(tc, expected, tuple_type(tc, e->items.len, &items));
+        unify(tc, expected, tuple_type_of(tc, e->items.len, e->unboxed, &items));
         for (i = 0; i < e->items.len; i++) {
             tc_expr(tc, (const Expr *)e->items.items[i], (Ty *)items.items[i]);
         }

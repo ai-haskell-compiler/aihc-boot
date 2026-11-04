@@ -1,3 +1,6 @@
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE UnboxedTuples #-}
+
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE GHCForeignImportPrim #-}
 
@@ -5,6 +8,91 @@
 -- every @foreign import prim@; the string names the primitive.
 module GHC.Prim
   ( seq,
+    -- * The primitive types, as in GHC
+    Int#,
+    Word#,
+    Char#,
+    Double#,
+    Float#,
+    Addr#,
+    State#,
+    RealWorld,
+    Array#,
+    MutableArray#,
+    SmallArray#,
+    SmallMutableArray#,
+    ByteArray#,
+    MutableByteArray#,
+    MutVar#,
+    MVar#,
+    TVar#,
+    ThreadId#,
+    StablePtr#,
+    StableName#,
+    Weak#,
+    -- * The primops of GHC
+    (+#),
+    (-#),
+    (*#),
+    quotInt#,
+    remInt#,
+    negateInt#,
+    (==#),
+    (/=#),
+    (<#),
+    (<=#),
+    (>#),
+    (>=#),
+    andI#,
+    orI#,
+    xorI#,
+    notI#,
+    uncheckedIShiftL#,
+    uncheckedIShiftRA#,
+    uncheckedIShiftRL#,
+    plusWord#,
+    minusWord#,
+    timesWord#,
+    quotWord#,
+    remWord#,
+    and#,
+    or#,
+    xor#,
+    not#,
+    uncheckedShiftL#,
+    uncheckedShiftRL#,
+    int2Word#,
+    word2Int#,
+    eqWord#,
+    neWord#,
+    ltWord#,
+    leWord#,
+    gtWord#,
+    geWord#,
+    popCnt#,
+    clz#,
+    ctz#,
+    chr#,
+    ord#,
+    eqChar#,
+    neChar#,
+    ltChar#,
+    leChar#,
+    gtChar#,
+    geChar#,
+    unsafeCoerce#,
+    reallyUnsafePtrEquality#,
+    newMutVar#,
+    readMutVar#,
+    writeMutVar#,
+    newMVar#,
+    takeMVar#,
+    readMVar#,
+    putMVar#,
+    isEmptyMVar#,
+    touch#,
+    noDuplicate#,
+    seq#,
     primRaise,
     primUnsafeCoerce,
     primCatch,
@@ -86,7 +174,7 @@ foreign import prim "raise" primRaise :: e -> a
 
 -- | Run an action on the world. When it raises an exception, apply the
 -- handler to the exception and the world.
-foreign import prim "catch" primCatch :: (World -> IORes a) -> (e -> World -> IORes a) -> World -> IORes a
+foreign import prim "catch" primCatch :: (State# RealWorld -> (# State# RealWorld, a #)) -> (e -> State# RealWorld -> (# State# RealWorld, a #)) -> State# RealWorld -> (# State# RealWorld, a #)
 
 -- | The same value at another type.
 foreign import prim "unsafeCoerce" primUnsafeCoerce :: a -> b
@@ -222,3 +310,176 @@ foreign import prim "fileSize" primFileSize :: [Char] -> IO Int
 foreign import prim "readFileInto" primReadFileInto :: [Char] -> Int -> Int -> IO Int
 
 foreign import prim "writeFileFrom" primWriteFileFrom :: [Char] -> Int -> Int -> Int -> IO Int
+
+-- The primops of GHC. The boxed and the primitive types have the same
+-- representation at run time, so the primitives of the boot base serve
+-- for both. A comparison gives 1# or 0#.
+
+foreign import prim "intAdd" (+#) :: Int# -> Int# -> Int#
+
+foreign import prim "intSub" (-#) :: Int# -> Int# -> Int#
+
+foreign import prim "intMul" (*#) :: Int# -> Int# -> Int#
+
+foreign import prim "intQuot" quotInt# :: Int# -> Int# -> Int#
+
+foreign import prim "intRem" remInt# :: Int# -> Int# -> Int#
+
+foreign import prim "intNegate" negateInt# :: Int# -> Int#
+
+foreign import prim "intEq" primIntEq# :: Int# -> Int# -> Bool
+
+foreign import prim "intNe" primIntNe# :: Int# -> Int# -> Bool
+
+foreign import prim "intLt" primIntLt# :: Int# -> Int# -> Bool
+
+foreign import prim "intLe" primIntLe# :: Int# -> Int# -> Bool
+
+foreign import prim "intGt" primIntGt# :: Int# -> Int# -> Bool
+
+foreign import prim "intGe" primIntGe# :: Int# -> Int# -> Bool
+
+boolInt# :: Bool -> Int#
+boolInt# True = 1#
+boolInt# False = 0#
+
+(==#), (/=#), (<#), (<=#), (>#), (>=#) :: Int# -> Int# -> Int#
+a ==# b = boolInt# (primIntEq# a b)
+a /=# b = boolInt# (primIntNe# a b)
+a <# b = boolInt# (primIntLt# a b)
+a <=# b = boolInt# (primIntLe# a b)
+a ># b = boolInt# (primIntGt# a b)
+a >=# b = boolInt# (primIntGe# a b)
+
+infix 4 ==#, /=#, <#, <=#, >#, >=#
+
+infixl 6 +#, -#
+
+infixl 7 *#
+
+foreign import prim "intAnd" andI# :: Int# -> Int# -> Int#
+
+foreign import prim "intOr" orI# :: Int# -> Int# -> Int#
+
+foreign import prim "intXor" xorI# :: Int# -> Int# -> Int#
+
+notI# :: Int# -> Int#
+notI# a = xorI# a (negateInt# 1#)
+
+foreign import prim "intShl" uncheckedIShiftL# :: Int# -> Int# -> Int#
+
+foreign import prim "intShra" uncheckedIShiftRA# :: Int# -> Int# -> Int#
+
+foreign import prim "intShrl" uncheckedIShiftRL# :: Int# -> Int# -> Int#
+
+foreign import prim "intAdd" plusWord# :: Word# -> Word# -> Word#
+
+foreign import prim "intSub" minusWord# :: Word# -> Word# -> Word#
+
+foreign import prim "intMul" timesWord# :: Word# -> Word# -> Word#
+
+foreign import prim "wordQuot" quotWord# :: Word# -> Word# -> Word#
+
+foreign import prim "wordRem" remWord# :: Word# -> Word# -> Word#
+
+foreign import prim "intAnd" and# :: Word# -> Word# -> Word#
+
+foreign import prim "intOr" or# :: Word# -> Word# -> Word#
+
+foreign import prim "intXor" xor# :: Word# -> Word# -> Word#
+
+not# :: Word# -> Word#
+not# a = xor# a (int2Word# (negateInt# 1#))
+
+foreign import prim "intShl" uncheckedShiftL# :: Word# -> Int# -> Word#
+
+foreign import prim "intShrl" uncheckedShiftRL# :: Word# -> Int# -> Word#
+
+foreign import prim "unsafeCoerce" int2Word# :: Int# -> Word#
+
+foreign import prim "unsafeCoerce" word2Int# :: Word# -> Int#
+
+foreign import prim "intEq" primWordEq# :: Word# -> Word# -> Bool
+
+foreign import prim "intNe" primWordNe# :: Word# -> Word# -> Bool
+
+foreign import prim "wordLt" primWordLt# :: Word# -> Word# -> Bool
+
+foreign import prim "wordLe" primWordLe# :: Word# -> Word# -> Bool
+
+foreign import prim "wordGt" primWordGt# :: Word# -> Word# -> Bool
+
+foreign import prim "wordGe" primWordGe# :: Word# -> Word# -> Bool
+
+eqWord#, neWord#, ltWord#, leWord#, gtWord#, geWord# :: Word# -> Word# -> Int#
+eqWord# a b = boolInt# (primWordEq# a b)
+neWord# a b = boolInt# (primWordNe# a b)
+ltWord# a b = boolInt# (primWordLt# a b)
+leWord# a b = boolInt# (primWordLe# a b)
+gtWord# a b = boolInt# (primWordGt# a b)
+geWord# a b = boolInt# (primWordGe# a b)
+
+foreign import prim "intPopCount" popCnt# :: Word# -> Word#
+
+foreign import prim "intClz" clz# :: Word# -> Word#
+
+foreign import prim "intCtz" ctz# :: Word# -> Word#
+
+foreign import prim "chr" chr# :: Int# -> Char#
+
+foreign import prim "ord" ord# :: Char# -> Int#
+
+foreign import prim "charEq" primCharEq# :: Char# -> Char# -> Bool
+
+foreign import prim "charNe" primCharNe# :: Char# -> Char# -> Bool
+
+foreign import prim "charLt" primCharLt# :: Char# -> Char# -> Bool
+
+foreign import prim "charLe" primCharLe# :: Char# -> Char# -> Bool
+
+foreign import prim "charGt" primCharGt# :: Char# -> Char# -> Bool
+
+foreign import prim "charGe" primCharGe# :: Char# -> Char# -> Bool
+
+eqChar#, neChar#, ltChar#, leChar#, gtChar#, geChar# :: Char# -> Char# -> Int#
+eqChar# a b = boolInt# (primCharEq# a b)
+neChar# a b = boolInt# (primCharNe# a b)
+ltChar# a b = boolInt# (primCharLt# a b)
+leChar# a b = boolInt# (primCharLe# a b)
+gtChar# a b = boolInt# (primCharGt# a b)
+geChar# a b = boolInt# (primCharGe# a b)
+
+foreign import prim "unsafeCoerce" unsafeCoerce# :: a -> b
+
+-- | Whether two values are the same object, without evaluating them.
+foreign import prim "ptrEq" reallyUnsafePtrEquality# :: a -> a -> Int#
+
+foreign import prim "mutVarNew" newMutVar# :: a -> State# s -> (# State# s, MutVar# s a #)
+
+foreign import prim "mutVarRead" readMutVar# :: MutVar# s a -> State# s -> (# State# s, a #)
+
+foreign import prim "mutVarWrite" writeMutVar# :: MutVar# s a -> a -> State# s -> State# s
+
+foreign import prim "mvarNew" newMVar# :: State# s -> (# State# s, MVar# s a #)
+
+-- | Take the value of a full MVar. The boot evaluator has one thread, so
+-- an empty MVar is an error.
+foreign import prim "mvarTake" takeMVar# :: MVar# s a -> State# s -> (# State# s, a #)
+
+foreign import prim "mvarRead" readMVar# :: MVar# s a -> State# s -> (# State# s, a #)
+
+foreign import prim "mvarPut" putMVar# :: MVar# s a -> a -> State# s -> State# s
+
+foreign import prim "mvarIsEmpty" isEmptyMVar# :: MVar# s a -> State# s -> (# State# s, Int# #)
+
+-- | Keep a value alive until this point. The collector of the boot
+-- evaluator moves no memory that a Ptr points to, so this does nothing.
+touch# :: a -> State# s -> State# s
+touch# _ s = s
+
+noDuplicate# :: State# s -> State# s
+noDuplicate# s = s
+
+-- | Evaluate the value in the state thread.
+seq# :: a -> State# s -> (# State# s, a #)
+seq# a s = a `seq` (# s, a #)

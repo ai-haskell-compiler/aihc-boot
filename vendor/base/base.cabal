@@ -69,9 +69,11 @@ library
     GHC.Err
     GHC.Exception
     GHC.Exception.Type
+    GHC.Exts
     GHC.ForeignPtr
     GHC.Generics
     GHC.Int
+    GHC.IsList
     GHC.List
     GHC.Maybe
     GHC.Num
