@@ -55,9 +55,13 @@ LexOptions lex_options_from_source(const char *src)
     Vec exts = language_pragmas(src);
     size_t i;
     opts.magic_hash = 0;
+    opts.unboxed = 0;
     for (i = 0; i < exts.len; i++) {
-        if (str_eq((const char *)exts.items[i], "MagicHash")) {
+        const char *ext = (const char *)exts.items[i];
+        if (str_eq(ext, "MagicHash")) {
             opts.magic_hash = 1;
+        } else if (str_eq(ext, "UnboxedTuples") || str_eq(ext, "UnboxedSums")) {
+            opts.unboxed = 1;
         }
     }
     return opts;
@@ -654,7 +658,11 @@ static int char_or_tick(Lexer *lx, Token *tok)
         c = next;
     }
     if (c != NONE && peek(lx) == '\'') {
+        StrBuf hash;
         bump(lx);
+        /* A primitive character literal: 'c'# (MagicHash). */
+        sb_init(&hash);
+        magic_hash_suffix(lx, &hash);
         tok->kind = TOK_CHAR;
         tok->ch = c;
         tok->text = slice(lx, save_idx, lx->idx);
@@ -680,6 +688,10 @@ static int string(Lexer *lx, Token *tok)
             return error(lx, start, xstrdup("unterminated string literal"));
         }
         if (c == '"') {
+            /* A primitive string literal: "s"# (MagicHash). */
+            StrBuf hash;
+            sb_init(&hash);
+            magic_hash_suffix(lx, &hash);
             tok->kind = TOK_STRING;
             tok->value_len = s.len;
             tok->value = sb_take(&s);
@@ -728,6 +740,22 @@ static int next_token(Lexer *lx, Token *tok)
     *tok = token(TOK_EOF, start);
     c = peek(lx);
     if (c == NONE) {
+        return 0;
+    }
+    /* UnboxedTuples: `(#` opens and `#)` closes. `(#)` stays the
+     * operator `#` in parentheses. */
+    if (lx->opts.unboxed && c == '(' && peek_at(lx, 1) == '#' && peek_at(lx, 2) != ')') {
+        bump_n(lx, 2);
+        tok->kind = TOK_SPECIAL;
+        tok->ch = SPECIAL_UOPEN;
+        tok->end = lx->pos;
+        return 0;
+    }
+    if (lx->opts.unboxed && c == '#' && peek_at(lx, 1) == ')') {
+        bump_n(lx, 2);
+        tok->kind = TOK_SPECIAL;
+        tok->ch = SPECIAL_UCLOSE;
+        tok->end = lx->pos;
         return 0;
     }
     switch (c) {

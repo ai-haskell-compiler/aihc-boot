@@ -55,7 +55,8 @@ typedef enum {
     TOK_STRING,   /* value, value_len: the decoded value; text: the source spelling */
     TOK_KEYWORD,  /* ch: a Keyword */
     TOK_RESERVEDOP, /* ch: a ReservedOp */
-    TOK_SPECIAL,  /* ch: one of ( ) , ; [ ] ` { } */
+    TOK_SPECIAL,  /* ch: one of ( ) , ; [ ] ` { }, or SPECIAL_UOPEN `(#`
+                     and SPECIAL_UCLOSE `#)` (UnboxedTuples) */
     TOK_PRAGMA,   /* text: a LANGUAGE pragma without `{-#` and `#-}` */
     TOK_TICK,     /* a lone `'` (DataKinds) */
     TOK_VOPEN,    /* a virtual `{` */
@@ -63,6 +64,10 @@ typedef enum {
     TOK_VSEMI,    /* a virtual `;` */
     TOK_EOF
 } TokenKind;
+
+/* The `ch` of the special tokens `(#` and `#)`. */
+#define SPECIAL_UOPEN 1
+#define SPECIAL_UCLOSE 2
 
 /* Reserved words. `as`, `hiding` and `qualified` are not reserved in
  * Haskell. The lexer returns them as TOK_VARID; the parser recognizes
@@ -150,6 +155,7 @@ void tokvec_push(TokenVec *v, Token t);
 
 typedef struct {
     int magic_hash; /* permit `#` at the end of names, as in `Int#` */
+    int unboxed;    /* the tokens `(#` and `#)` (UnboxedTuples) */
 } LexOptions;
 
 /* The options for a source file, from its LANGUAGE pragmas. */
@@ -292,7 +298,8 @@ typedef enum {
     TY_FUN,      /* a b: `a -> b` */
     TY_OP,       /* a con b: `a `Op` b`, `a :+: b` or `a ~ b` */
     TY_LIST,     /* a span: `[a]`, with the span of the brackets */
-    TY_TUPLE,    /* items: `(a, b)`; `()` is TY_CON */
+    TY_TUPLE,    /* items unboxed: `(a, b)`, or `(# a, b #)` with any
+                    number of items; `()` is TY_CON */
     TY_PAREN,    /* a span: `(t)`, with the span of the parentheses */
     TY_FORALL,   /* binders a: `forall a b. t` */
     TY_QUAL,     /* a b: `ctx => t`; the context is a type */
@@ -313,6 +320,7 @@ struct Type {
     Vec items;   /* Type * */
     Vec binders; /* TyVarBind * */
     Literal lit;
+    int unboxed; /* TY_TUPLE: `(# ... #)` */
 };
 
 /* A constructor argument or record field type, with its strictness. */
@@ -334,7 +342,8 @@ typedef struct {
 typedef enum {
     CON_PREFIX, /* name args: `C a b` */
     CON_INFIX,  /* left op right: `a :+ b` */
-    CON_RECORD  /* name fields: `C { f :: a }` */
+    CON_RECORD, /* name fields: `C { f :: a }` */
+    CON_GADT    /* names ty: `C, D :: a -> T a` in a `where` block */
 } ConBodyKind;
 
 /* One constructor of a data declaration. */
@@ -348,6 +357,8 @@ typedef struct {
     BangType left;  /* CON_INFIX */
     BangType right; /* CON_INFIX */
     Vec fields;   /* Field *: CON_RECORD */
+    Vec names;    /* Ident *: CON_GADT */
+    Type *ty;     /* CON_GADT: the type after `::` */
 } ConDecl;
 
 typedef enum {
@@ -397,6 +408,12 @@ typedef struct {
     char *right;
 } PatSynLhs;
 
+/* A functional dependency of a class: `a b -> c`. */
+typedef struct {
+    Vec from; /* char * */
+    Vec to;   /* char * */
+} FunDep;
+
 typedef enum {
     PATSYN_UNIDIRECTIONAL, /* `pattern P <- p` */
     PATSYN_IMPLICIT,       /* `pattern P = p` */
@@ -412,6 +429,13 @@ typedef enum {
     DECL_TYPE_SYN,      /* name vars ty: `type T a = t` */
     DECL_TYPE_FAMILY,   /* name vars kind */
     DECL_TYPE_INSTANCE, /* lhs_ty ty: `type instance F Int = t` */
+    DECL_DATA_FAMILY,   /* name vars kind: `data family F a :: k` */
+    DECL_DATA_INSTANCE, /* newtype lhs_ty kind cons deriving gadt:
+                           `data instance F Int = C` */
+    DECL_ROLE,          /* name strs: `type role T nominal _` */
+    DECL_DERIVING,      /* deriving ty: `deriving newtype instance C T`;
+                           deriving has one clause, for the strategy and
+                           `via`, without classes */
     DECL_CLASS,         /* ctx name vars body */
     DECL_INSTANCE,      /* ty body: the head is a type with any forall
                            and context */
@@ -437,9 +461,16 @@ struct Decl {
     Type *kind_sig; /* optional: `data T :: k`, a family's kind */
     Vec cons;       /* ConDecl * */
     Vec deriving;   /* Deriving * */
-    Type *lhs_ty;   /* DECL_TYPE_INSTANCE */
-    int keyword;    /* DECL_TYPE_FAMILY, DECL_TYPE_INSTANCE: the source
-                       has `family` or `instance` after `type` */
+    Type *lhs_ty;   /* DECL_TYPE_INSTANCE, DECL_DATA_INSTANCE */
+    int keyword;    /* DECL_TYPE_FAMILY, DECL_TYPE_INSTANCE,
+                       DECL_DATA_FAMILY, DECL_DATA_INSTANCE: the source
+                       has `family` or `instance` after `type` or `data` */
+    int gadt;       /* DECL_DATA, DECL_DATA_INSTANCE: the constructors
+                       are CON_GADT, in a `where` block */
+    Vec fundeps;    /* FunDep *: DECL_CLASS */
+    TyVarBind *result; /* optional: DECL_TYPE_FAMILY `= r` or `= (r :: k)` */
+    Vec injective;  /* char *: DECL_TYPE_FAMILY `| r -> a b`, the names
+                       after the arrow */
     Type *ctx;      /* optional: DECL_CLASS */
     Vec body;       /* Decl *: DECL_CLASS, DECL_INSTANCE, and the where
                        block of PATSYN_EXPLICIT */
@@ -490,7 +521,8 @@ typedef enum {
     PAT_CON,      /* con args: `C p1 p2`; a bare constructor has no args */
     PAT_INFIX,    /* a steps: `p1 op p2 op p3` in source order */
     PAT_RECORD,   /* con fields wildcard: `C { f = p, g, .. }` */
-    PAT_TUPLE,    /* args */
+    PAT_TUPLE,    /* args unboxed: `(a, b)`, or `(# a, b #)` with any
+                     number of items */
     PAT_LIST,     /* args */
     PAT_PAREN,    /* a */
     PAT_AS,       /* var a: `x@p` */
@@ -515,6 +547,7 @@ struct Pat {
     Expr *expr;
     Type *ty;
     Span span; /* PAT_LIT only: the literal, without a minus sign */
+    int unboxed; /* PAT_TUPLE: `(# ... #)` */
     struct TcNote *note; /* written by the typechecker (tc.h) */
 };
 
@@ -563,7 +596,8 @@ typedef enum {
     EXPR_MULTI_IF,    /* guards: `if | g1 -> e1 | g2 -> e2` (MultiWayIf) */
     EXPR_CASE,        /* a alts */
     EXPR_DO,          /* stmts */
-    EXPR_TUPLE,       /* items */
+    EXPR_TUPLE,       /* items unboxed: `(a, b)`, or `(# a, b #)` with
+                         any number of items */
     EXPR_TUPLE_SECTION, /* items: a missing component is NULL */
     EXPR_LIST,        /* items */
     EXPR_ARITH_SEQ,   /* a b c: `[from, then .. to]`; b and c optional */
@@ -594,6 +628,7 @@ struct Expr {
     Vec fields; /* FieldUpdate * */
     Vec guards; /* GuardedRhs *: EXPR_MULTI_IF */
     int wildcard;
+    int unboxed; /* EXPR_TUPLE: `(# ... #)` */
     Span span;  /* EXPR_LIT, EXPR_LIST, EXPR_TUPLE, EXPR_TUPLE_SECTION,
                    EXPR_NEG and EXPR_ARITH_SEQ only: the whole expression;
                    the resolver reports the syntax terms of these at this

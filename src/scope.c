@@ -361,6 +361,11 @@ static Vec con_children(const ConDecl *con)
             }
         }
         break;
+    case CON_GADT:
+        for (i = 0; i < con->names.len; i++) {
+            vec_push(&out, (char *)bare(((const Ident *)con->names.items[i])->name));
+        }
+        break;
     }
     return out;
 }
