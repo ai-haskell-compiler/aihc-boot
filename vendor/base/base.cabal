@@ -29,6 +29,8 @@ library
     Data.Bits
     Data.Bool
     Data.Char
+    Data.Data
+    Data.Dynamic
     Data.Either
     Data.Eq
     Data.Foldable
