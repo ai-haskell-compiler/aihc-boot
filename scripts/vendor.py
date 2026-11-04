@@ -6,7 +6,8 @@
   scripts/vendor.py --force text   # re-fetch, overwriting local edits
 
 Hackage packages use `version` from boot.toml, or the latest preferred
-version if unset. Git packages use `url`, `rev` and optional `subdir`.
+version if unset, with the latest Hackage revision of the .cabal file.
+Git packages use `url`, `rev` and optional `subdir`.
 Test, benchmark and example directories are removed: aihc-boot only has to
 compile libraries and executables. If the package has an `include` list in
 boot.toml, only the paths that match its globs stay. The fetched version and the upstream size
@@ -57,7 +58,17 @@ def vendor_hackage(name: str, spec: dict, dest: Path) -> dict:
     with tarfile.open(fileobj=io.BytesIO(blob)) as tar, tempfile.TemporaryDirectory() as tmp:
         tar.extractall(tmp, filter="data")
         shutil.copytree(Path(tmp) / f"{name}-{version}", dest)
-    return {"source": "hackage", "version": version, "sha256": hashlib.sha256(blob).hexdigest()}
+    # Hackage revisions change the .cabal file after the release, for
+    # example to allow a newer base. Use the latest revision.
+    # Hackage serves a revision with CRLF line ends.
+    cabal = fetch(f"{HACKAGE}/package/{name}-{version}/{name}.cabal")
+    (dest / f"{name}.cabal").write_bytes(cabal.replace(b"\r\n", b"\n"))
+    return {
+        "source": "hackage",
+        "version": version,
+        "sha256": hashlib.sha256(blob).hexdigest(),
+        "cabal_sha256": hashlib.sha256(cabal).hexdigest(),
+    }
 
 
 def vendor_git(name: str, spec: dict, dest: Path) -> dict:
