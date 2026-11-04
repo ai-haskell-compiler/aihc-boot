@@ -49,6 +49,7 @@ static const char USAGE[] =
     "  aihc-boot parse FILE\n"
     "  aihc-boot print FILE\n"
     "  aihc-boot run FILE.hs\n"
+    "  aihc-boot run vendor/PKG/.../Main.hs\n"
     "  aihc-boot core [--all] FILE.hs\n";
 
 /* The directory for the files that aihc-boot writes. */
@@ -739,17 +740,21 @@ static char *lex_file(int argc, char **argv)
 /* --- run and core ------------------------------------------------------- */
 
 /* The package that a program runs against: PKG for a file under
- * tests/eval/PKG/ when PKG is vendored, and the boot `base` otherwise. */
+ * tests/eval/PKG/ or vendor/PKG/ when PKG is vendored, and the boot
+ * `base` otherwise. A file under vendor/PKG/ is the main module of an
+ * executable of PKG, for example vendor/aihc/exe/Main.hs. */
 static const char *eval_package(const char *file, const StrMap *vendored)
 {
-    const char *prefix = "tests/eval/";
     const char *rest;
     const char *slash;
     char *name;
-    if (!str_starts_with(file, prefix)) {
+    if (str_starts_with(file, "tests/eval/")) {
+        rest = file + strlen("tests/eval/");
+    } else if (str_starts_with(file, "vendor/")) {
+        rest = file + strlen("vendor/");
+    } else {
         return "base";
     }
-    rest = file + strlen(prefix);
     slash = strchr(rest, '/');
     if (slash == NULL) {
         return "base";
@@ -774,9 +779,14 @@ static char *program_for_file(const char *file, Program **out, Vec *packages)
     SourceModule *source;
     Report report;
     Module *module;
-    char *e = package_order(eval_package(file, &vendored), &vendored, &order);
+    const char *target = eval_package(file, &vendored);
+    const CabalPackage *target_cabal = NULL;
+    char *e = package_order(target, &vendored, &order);
     if (e != NULL) {
         return e;
+    }
+    if (str_starts_with(file, "vendor/")) {
+        target_cabal = (const CabalPackage *)strmap_get(&vendored, target);
     }
     builtins = builtin_modules(&order);
     p = program_new(&builtins);
@@ -791,7 +801,12 @@ static char *program_for_file(const char *file, Program **out, Vec *packages)
         vec_init(&package->modules);
         for (j = 0; j < files.len; j++) {
             const char *path = (const char *)files.items[j];
-            Module *m = read_module(path, &report);
+            Module *m;
+            /* The main module goes into the package "main" below. */
+            if (path_cmp(path, file) == 0) {
+                continue;
+            }
+            m = read_module(path, &report);
             if (m == NULL) {
                 return str_printf("%s: %s", path, report.error);
             }
@@ -809,7 +824,11 @@ static char *program_for_file(const char *file, Program **out, Vec *packages)
     }
     main_pkg = (Package *)xcalloc(1, sizeof *main_pkg);
     main_pkg->name = xstrdup("main");
-    vec_init(&main_pkg->extensions);
+    if (target_cabal != NULL) {
+        main_pkg->extensions = target_cabal->extensions;
+    } else {
+        vec_init(&main_pkg->extensions);
+    }
     vec_init(&main_pkg->modules);
     source = (SourceModule *)xmalloc(sizeof *source);
     source->path = xstrdup(file);
