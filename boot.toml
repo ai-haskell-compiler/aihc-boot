@@ -212,7 +212,7 @@ version = "9.7.0"
 [packages.prettyprinter]
 plan = "simplify"
 source = "hackage"
-include = ["prettyprinter.cabal", "LICENSE.md", "src", "src-text", "misc"]
+include = ["prettyprinter.cabal", "LICENSE.md", "src", "misc"]
 used_by = ["aihc", "aihc-parser"]
 version = "1.7.1"
 
