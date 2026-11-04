@@ -168,6 +168,8 @@ struct Program {
     /* The constructors and fields of each type, and the methods and
      * associated types of each class (Vec * of Child *), by entity_key. */
     StrMap children;
+    /* The pattern synonyms, as the keys of a set (entity_key). */
+    StrMap patsyns;
     /* The modules whose `:` and `~` every module sees without an import
      * (char *). */
     Vec builtin_modules;
@@ -186,6 +188,7 @@ Program *program_new(const Vec *builtin)
     strmap_init(&p->modules);
     strmap_init(&p->paths);
     strmap_init(&p->children);
+    strmap_init(&p->patsyns);
     vec_init(&p->builtin_modules);
     for (i = 0; i < builtin->len; i++) {
         vec_push(&p->builtin_modules, xstrdup((const char *)builtin->items[i]));
@@ -251,6 +254,11 @@ Target program_builtin(const Program *p, const char *module, Space space,
 const Vec *program_children(const Program *p, const Entity *parent)
 {
     return (const Vec *)strmap_get(&p->children, entity_key(parent));
+}
+
+int program_is_patsyn(const Program *p, const Entity *e)
+{
+    return strmap_has(&p->patsyns, entity_key(e));
 }
 
 /* The names that every module sees without an import: `:` and `~` from
@@ -446,9 +454,13 @@ static Scope *own_scope(const char *package, const Module *module, ResolveError 
             add_term(scope, package, module, decl->name.name);
             break;
         case DECL_PAT_SYN:
-        case DECL_PAT_SYN_SIG:
-            *err = unsupported("a pattern synonym", &decl->pos);
-            return NULL;
+            add_term(scope, package, module, bare(decl->patsyn.name));
+            if (decl->patsyn.kind == PATSYN_RECORD) {
+                for (j = 0; j < decl->patsyn.args.len; j++) {
+                    add_term(scope, package, module, (const char *)decl->patsyn.args.items[j]);
+                }
+            }
+            break;
         default:
             break;
         }
@@ -474,6 +486,14 @@ static void declared_children(Program *p, const char *package, const Module *mod
         const Decl *decl = (const Decl *)module->decls.items[i];
         Vec *children;
         Entity parent;
+        if (decl->kind == DECL_PAT_SYN) {
+            Entity patsyn;
+            patsyn.package = package;
+            patsyn.module = module->name;
+            patsyn.name = bare(decl->patsyn.name);
+            strmap_put(&p->patsyns, entity_key(&patsyn), NULL);
+            continue;
+        }
         if (decl->kind != DECL_DATA && decl->kind != DECL_CLASS) {
             continue;
         }
@@ -566,9 +586,32 @@ static const Scope *exports_of(const Program *p, const char *module, ResolveErro
     return data->exports;
 }
 
+/* Make name, a pattern synonym, a child of parent: `T (.., P)` or
+ * `T (P)` in an export list bundles P with T. */
+static void bundle_child(Program *p, const Entity *parent, const char *name)
+{
+    char *key = entity_key(parent);
+    Vec *children = (Vec *)strmap_get(&p->children, key);
+    size_t i;
+    if (children == NULL) {
+        children = (Vec *)xmalloc(sizeof *children);
+        vec_init(children);
+        strmap_put(&p->children, key, children);
+    }
+    for (i = 0; i < children->len; i++) {
+        const Child *child = (const Child *)children->items[i];
+        if (child->space == SPACE_TERM && str_eq(child->name, name)) {
+            return;
+        }
+    }
+    vec_push(children, child_new(SPACE_TERM, name));
+}
+
 /* Add the children of parent that subs names, as far as source has
- * them. Returns NULL on success. */
-static ResolveError *add_children(const Program *p, const Entity *parent,
+ * them. In an export list (bundle is the program), a name in subs that
+ * is not a child of parent is a pattern synonym to bundle with it.
+ * Returns NULL on success. */
+static ResolveError *add_children(const Program *p, Program *bundle, const Entity *parent,
                                   const Subs *subs, const Scope *source, Scope *into)
 {
     const Vec *children;
@@ -576,8 +619,26 @@ static ResolveError *add_children(const Program *p, const Entity *parent,
     if (subs->kind == SUBS_NONE) {
         return NULL;
     }
-    if (subs->kind == SUBS_ALL_AND) {
-        return unsupported("a bundled pattern synonym", NULL);
+    if (subs->kind == SUBS_ALL_AND || subs->kind == SUBS_SOME) {
+        for (i = 0; i < subs->names.len; i++) {
+            const char *name = (const char *)subs->names.items[i];
+            const Vec *declared = program_children(p, parent);
+            size_t j;
+            int is_child = 0;
+            for (j = 0; declared != NULL && j < declared->len; j++) {
+                is_child = is_child || str_eq(((const Child *)declared->items[j])->name, name);
+            }
+            if (is_child) {
+                continue;
+            }
+            if (bundle == NULL) {
+                return unsupported("a bundled pattern synonym in an import", NULL);
+            }
+            if (strmap_has(&source->terms, name)) {
+                strmap_put(&into->terms, name, strmap_get(&source->terms, name));
+                bundle_child(bundle, parent, name);
+            }
+        }
     }
     children = program_children(p, parent);
     if (children == NULL) {
@@ -587,6 +648,10 @@ static ResolveError *add_children(const Program *p, const Entity *parent,
         const Child *child = (const Child *)children->items[i];
         void *entity;
         if (subs->kind == SUBS_SOME && !vec_has_str(&subs->names, child->name)) {
+            continue;
+        }
+        if (subs->kind == SUBS_ALL_AND && vec_has_str(&subs->names, child->name)
+            && strmap_has(&into->terms, child->name)) {
             continue;
         }
         if (child->space == SPACE_TERM) {
@@ -651,7 +716,7 @@ static const Scope *import_scope(const Program *p, const Import *import,
         } else {
             ResolveError *e;
             strmap_put(&selected->types, item->name, entity);
-            e = add_children(p, entity, &item->subs, exports, selected);
+            e = add_children(p, NULL, entity, &item->subs, exports, selected);
             if (e != NULL) {
                 *err = e;
                 return NULL;
@@ -713,7 +778,7 @@ static Scope *module_scope(const Program *p, const char *package,
 
 /* The names that a module exports. Returns NULL and sets *err on
  * failure. */
-static Scope *module_exports(const Program *p, const char *package,
+static Scope *module_exports(Program *p, const char *package,
                              const Module *module, const Scope *scope,
                              ResolveError **err)
 {
@@ -727,7 +792,7 @@ static Scope *module_exports(const Program *p, const char *package,
         const Export *export = (const Export *)module->exports.items[i];
         const Scope *source;
         Entity *entity;
-        if (export->kind == EXPORT_VAR) {
+        if (export->kind == EXPORT_VAR || export->kind == EXPORT_PATTERN) {
             source = scope_qualifier(scope, export->name.qual);
             entity = source == NULL ? NULL
                                     : (Entity *)strmap_get(&source->terms,
@@ -744,7 +809,7 @@ static Scope *module_exports(const Program *p, const char *package,
             entity = (Entity *)strmap_get(&source->types, export->name.name);
             if (entity != NULL) {
                 strmap_put(&out->types, export->name.name, entity);
-                e = add_children(p, entity, &export->subs, source, out);
+                e = add_children(p, p, entity, &export->subs, source, out);
                 if (e != NULL) {
                     *err = e;
                     return NULL;

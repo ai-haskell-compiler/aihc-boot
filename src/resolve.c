@@ -410,6 +410,64 @@ static ResolveError *instance_head(Resolver *r, const Type *head, Pos pos,
     return unsupported("this instance head", &pos);
 }
 
+static ResolveError *pat(Resolver *r, const Pat *p, LocalVec *bound);
+
+/* A pattern synonym. As in aihc-resolve, the name has a record, and so
+ * have the names in the right-hand pattern, whose variables are binders.
+ * The parameters on the left have no records. In the `where` equations
+ * of an explicitly bidirectional synonym, the arguments and the body
+ * have records, but the name of the synonym has none. */
+static ResolveError *pattern_synonym(Resolver *r, const Decl *decl)
+{
+    const char *name = bare(decl->patsyn.name);
+    size_t mark = r->locals.len;
+    LocalVec bound;
+    ResolveError *e;
+    size_t i;
+    if (decl->patsyn.name[0] == '`') {
+        /* As in aihc-resolve, a name in backquotes starts at the first
+         * backquote, and is as wide as the name. */
+        Pos start = decl->patsyn.name_span.start;
+        start.col--;
+        emit(r, narrow(start, name), NS_TERM, lookup_top(r, SPACE_TERM, name));
+    } else {
+        emit(r, span(decl->patsyn.name_span), NS_TERM, lookup_top(r, SPACE_TERM, name));
+    }
+    memset(&bound, 0, sizeof bound);
+    e = pat(r, decl->pat, &bound);
+    free(bound.items);
+    if (e != NULL) {
+        return e;
+    }
+    for (i = 0; decl->dir == PATSYN_EXPLICIT && i < decl->body.len; i++) {
+        const Decl *eq = (const Decl *)decl->body.items[i];
+        const Pat *head = eq->lhs.pat;
+        Vec args;
+        /* The equation parses as a pattern binding, because the name is
+         * a constructor name: `R x = e` or `a :< b = e`. */
+        if (eq->kind != DECL_BIND || eq->lhs.kind != LHS_PAT) {
+            return unsupported("this pattern synonym equation", &eq->pos);
+        }
+        vec_init(&args);
+        if (head->kind == PAT_CON) {
+            args = head->args;
+        } else if (head->kind == PAT_INFIX && head->steps.len == 1) {
+            vec_push(&args, head->a);
+            vec_push(&args, ((const InfixStep *)head->steps.items[0])->operand);
+        } else {
+            return unsupported("this pattern synonym equation", &eq->pos);
+        }
+        if ((e = pats(r, &args)) == NULL) {
+            e = rhs(r, eq->rhs);
+        }
+        r->locals.len = mark;
+        if (e != NULL) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
 static ResolveError *top_decl(Resolver *r, const Decl *decl)
 {
     ResolveError *e;
@@ -423,6 +481,16 @@ static ResolveError *top_decl(Resolver *r, const Decl *decl)
         return sig_type(r, decl->ty, &decl->names);
     case DECL_FIXITY:
         return NULL;
+    case DECL_PAT_SYN_SIG: {
+        /* As in aihc-resolve, every name has the span of the first one. */
+        RecSpan first = narrow(after(decl->pos, "pattern "), (const char *)decl->strs.items[0]);
+        for (i = 0; i < decl->strs.len; i++) {
+            emit(r, first, NS_TERM, lookup_top(r, SPACE_TERM, (const char *)decl->strs.items[i]));
+        }
+        return ty(r, decl->ty);
+    }
+    case DECL_PAT_SYN:
+        return pattern_synonym(r, decl);
     case DECL_FOREIGN:
         /* As in aihc-resolve, the binder's span starts where the
          * declaration starts. */
@@ -843,14 +911,27 @@ static ResolveError *pat(Resolver *r, const Pat *p, LocalVec *bound)
         return pat(r, p->a, bound);
     case PAT_TYPE_ARG:
         return ty(r, p->ty);
-    case PAT_RECORD:
-        emit(r, span(p->con.span), NS_TERM, lookup_q(r, SPACE_TERM, &p->con));
+    case PAT_RECORD: {
+        Target con = lookup_q(r, SPACE_TERM, &p->con);
+        int patsyn = 0;
+        emit(r, span(p->con.span), NS_TERM, con);
+        if (con.kind == TARGET_TOP) {
+            Entity entity;
+            entity.package = con.package;
+            entity.module = con.module;
+            entity.name = con.name;
+            patsyn = program_is_patsyn(r->program, &entity);
+        }
         if (p->wildcard) {
             return unsupported("a record wildcard in a pattern", NULL);
         }
         for (i = 0; i < p->fields.len; i++) {
             const FieldPat *f = (const FieldPat *)p->fields.items[i];
-            emit(r, span(f->name.span), NS_TERM, lookup_q(r, SPACE_TERM, &f->name));
+            /* As in aihc-resolve, the fields of a pattern synonym have no
+             * records in a pattern. */
+            if (!patsyn) {
+                emit(r, span(f->name.span), NS_TERM, lookup_q(r, SPACE_TERM, &f->name));
+            }
             if (f->pat != NULL) {
                 if ((e = pat(r, f->pat, bound)) != NULL) {
                     return e;
@@ -863,6 +944,7 @@ static ResolveError *pat(Resolver *r, const Pat *p, LocalVec *bound)
             }
         }
         return NULL;
+    }
     case PAT_LIT:
         /* As for a literal expression, plus the `==` of the comparison
          * and the `negate` of a negative literal. A character or string
