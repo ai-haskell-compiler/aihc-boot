@@ -220,7 +220,8 @@ int layout(const TokenVec *in, TokenVec *out, SyntaxError *err)
         prev_line = pos.line;
 
         /* The parse-error rule, approximated. */
-        if (is_special(&tok, ')') || is_special(&tok, ']')) {
+        if (is_special(&tok, ')') || is_special(&tok, ']')
+            || is_special(&tok, SPECIAL_UCLOSE)) {
             close_implicit_at(&stack, out, depth, pos);
             if (depth > 0) {
                 depth--;
@@ -234,7 +235,8 @@ int layout(const TokenVec *in, TokenVec *out, SyntaxError *err)
             } else if (depth > 0) {
                 depth--;
             }
-        } else if (is_special(&tok, '(') || is_special(&tok, '[') || is_special(&tok, '{')) {
+        } else if (is_special(&tok, '(') || is_special(&tok, '[') || is_special(&tok, '{')
+                   || is_special(&tok, SPECIAL_UOPEN)) {
             depth++;
         }
 
