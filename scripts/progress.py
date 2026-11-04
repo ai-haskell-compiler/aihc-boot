@@ -67,43 +67,188 @@ def count_lines(files: list[Path]) -> int:
     return total
 
 
+# The compiler and the platform that `if` conditions in .cabal files see.
+GHC_VERSION = (9, 12, 3)
+FALSE_OS = {"windows", "mingw32", "ghcjs", "wasi"}
+FALSE_ARCH = {"javascript", "wasm32"}
+
+
+def _version(text: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in re.findall(r"\d+", text))
+
+
+def _impl(arg: str) -> bool:
+    """impl(ghc >= 8.0 && < 9.4): the compiler is GHC_VERSION."""
+    parts = arg.split(None, 1)
+    if parts[0].lower() != "ghc":
+        return False
+    if len(parts) == 1:
+        return True
+    ops = {
+        ">=": lambda a, b: a >= b,
+        "<=": lambda a, b: a <= b,
+        ">": lambda a, b: a > b,
+        "<": lambda a, b: a < b,
+        "==": lambda a, b: a[: len(b)] == b,
+    }
+    for term in parts[1].split("&&"):
+        m = re.match(r"\s*(>=|<=|==|>|<)\s*([\d.]+)\s*$", term)
+        if not m:
+            return True
+        if not ops[m.group(1)](GHC_VERSION, _version(m.group(2))):
+            return False
+    return True
+
+
+def _condition(text: str, flags: dict[str, bool]) -> bool:
+    """Evaluate the condition of an `if` line in a .cabal file."""
+    tokens = re.findall(r"\(|\)|!|&&|\|\||[A-Za-z_][\w-]*\s*\([^()]*\)|[A-Za-z_][\w-]*", text)
+    pos = 0
+
+    def atom() -> bool:
+        nonlocal pos
+        tok = tokens[pos]
+        pos += 1
+        if tok == "!":
+            return not atom()
+        if tok == "(":
+            value = disjunction()
+            pos += 1  # ")"
+            return value
+        m = re.match(r"([A-Za-z_][\w-]*)\s*\((.*)\)", tok)
+        if not m:
+            return tok.lower() == "true"
+        name, arg = m.group(1).lower(), m.group(2).strip()
+        if name == "impl":
+            return _impl(arg)
+        if name == "flag":
+            return flags.get(arg.lower(), True)
+        if name == "os":
+            return arg.lower() not in FALSE_OS
+        if name == "arch":
+            return arg.lower() not in FALSE_ARCH
+        return True
+
+    def conjunction() -> bool:
+        nonlocal pos
+        value = atom()
+        while pos < len(tokens) and tokens[pos] == "&&":
+            pos += 1
+            value = atom() and value
+        return value
+
+    def disjunction() -> bool:
+        nonlocal pos
+        value = conjunction()
+        while pos < len(tokens) and tokens[pos] == "||":
+            pos += 1
+            value = conjunction() or value
+        return value
+
+    return disjunction()
+
+
+def _cabal_flags(lines: list[str]) -> dict[str, bool]:
+    """The default value of every flag of a .cabal file."""
+    flags: dict[str, bool] = {}
+    name = None
+    for line in lines:
+        if not line.strip():
+            continue
+        if not line[0].isspace():
+            m = re.match(r"flag\s+(\S+)", line, re.IGNORECASE)
+            name = m.group(1).lower() if m else None
+            if name is not None:
+                flags[name] = True
+            continue
+        m = re.match(r"\s*default\s*:\s*(\S+)", line, re.IGNORECASE)
+        if name is not None and m:
+            flags[name] = m.group(1).lower() == "true"
+    return flags
+
+
 def cabal_build_depends(pkg_dir: Path, stanzas: list[str] | None = None) -> set[str]:
     """Package names in build-depends of the stanzas aihc-boot must build.
 
     `stanzas` limits the result to the named stanzas (for example
-    "library" or "executable aihc"). Common stanzas always count.
+    "library" or "executable aihc"). A common stanza counts when one of
+    these stanzas imports it. A dependency in the branch of an `if` that
+    GHC_VERSION on a Unix-like system does not take does not count, and
+    neither does a stanza with `buildable: False`.
     """
     wanted = {" ".join(s.lower().split()) for s in stanzas} if stanzas else None
     deps: set[str] = set()
     for cabal in pkg_dir.glob("*.cabal"):
-        in_stanza = True  # top-level fields before any stanza
-        field_indent = None
-        for raw in cabal.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = raw.split("--", 1)[0].rstrip()
+        text_lines = cabal.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = [raw.split("--", 1)[0].rstrip() for raw in text_lines]
+        flags = _cabal_flags(lines)
+        # The build-depends and the imports of each stanza, by header. The
+        # key "" holds the top-level fields before the first stanza.
+        stanza_deps: dict[str, set[str]] = {"": set()}
+        imports: dict[str, set[str]] = {"": set()}
+        counted = {""}
+        stanza = ""
+        # The open `if` blocks: (indent, parent active, branch taken, any branch taken).
+        blocks: list[tuple[int, bool, bool, bool]] = []
+        field = None  # (indent, name) of the field that continues
+        for line in lines:
             if not line.strip():
                 continue
             indent = len(line) - len(line.lstrip())
+            text = line.strip()
             if indent == 0:
-                header = " ".join(line.lower().split())
-                kind = header.split()[0]
-                in_stanza = kind in BUILD_STANZAS and (wanted is None or kind == "common" or header in wanted)
-                field_indent = None
+                stanza = " ".join(text.lower().split())
+                stanza_deps.setdefault(stanza, set())
+                imports.setdefault(stanza, set())
+                kind = stanza.split()[0]
+                if kind in BUILD_STANZAS - {"common"} and (wanted is None or stanza in wanted):
+                    counted.add(stanza)
+                blocks, field = [], None
                 continue
-            if field_indent is not None and indent > field_indent:
-                value = line
+            if field is not None and indent > field[0]:
+                value = text
             else:
-                field_indent = None
-                m = re.match(r"\s*build-depends\s*:(.*)", line, re.IGNORECASE)
-                if not m:
+                field = None
+                lower = text.lower()
+                if lower == "else" or re.match(r"elif\s", lower):
+                    while blocks and blocks[-1][0] > indent:
+                        blocks.pop()
+                    if blocks and blocks[-1][0] == indent:
+                        _, parent, _, taken = blocks.pop()
+                        cond = not taken and (lower == "else" or _condition(text[4:], flags))
+                        blocks.append((indent, parent, cond, taken or cond))
                     continue
-                field_indent = indent
-                value = m.group(1)
-            if not in_stanza:
+                while blocks and blocks[-1][0] >= indent:
+                    blocks.pop()
+                active = all(parent and cond for _, parent, cond, _ in blocks)
+                if re.match(r"if\s", lower):
+                    cond = _condition(text[2:], flags)
+                    blocks.append((indent, active, cond, cond))
+                    continue
+                m = re.match(r"([\w-]+)\s*:(.*)", text)
+                if not m or not active:
+                    continue
+                field = (indent, m.group(1).lower())
+                value = m.group(2)
+            if field[1] == "buildable" and value.strip().lower() == "false":
+                counted.discard(stanza)
+            elif field[1] == "import":
+                imports[stanza].update(v.strip().lower() for v in value.split(",") if v.strip())
+            elif field[1] == "build-depends":
+                for item in value.split(","):
+                    m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9-]*)", item)
+                    if m:
+                        stanza_deps[stanza].add(m.group(1))
+        # The counted stanzas, and the common stanzas that they import.
+        todo = list(counted)
+        seen: set[str] = set()
+        while todo:
+            s = todo.pop()
+            if s in seen:
                 continue
-            for item in value.split(","):
-                m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9-]*)", item)
-                if m:
-                    deps.add(m.group(1))
+            seen.add(s)
+            deps |= stanza_deps.get(s, set())
+            todo.extend("common " + i for i in imports.get(s, set()))
     return deps
 
 
