@@ -44,6 +44,14 @@ typedef struct {
     /* Every package name in a `build-depends` field, as the keys of a
      * set (the values are not used). */
     StrMap depends;
+    /* The `version` field, or NULL. */
+    char *version;
+    /* The `cpp-options` and the `include-dirs` of the main library and
+     * of the common stanzas that it imports (char *). The reader
+     * evaluates `if` conditions for GHC 9.12 on a Unix-like system, with
+     * the default flags, as `scripts/progress.py` does. */
+    Vec cpp_options;
+    Vec include_dirs;
 } CabalPackage;
 
 /* Read the first `.cabal` file in a package directory. NULL when there is

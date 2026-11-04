@@ -33,6 +33,7 @@
 #include "desugar.h"
 #include "eval.h"
 #include "manifest.h"
+#include "cpp.h"
 #include "resolve.h"
 #include "syntax.h"
 #include "sys.h"
@@ -332,7 +333,7 @@ static Module *read_module(const char *file, Report *report)
 {
     size_t len;
     char *err;
-    char *src = read_text(file, &len, &err);
+    char *src = source_text(file, &len, &err);
     char *ext;
     SyntaxError serr;
     Module *module;
@@ -404,7 +405,7 @@ static Report check_module(const char *file, const char *stage,
     for (i = 0; i < reference->flags.len; i++) {
         argv[n++] = (char *)reference->flags.items[i];
     }
-    argv[n++] = (char *)file;
+    argv[n++] = (char *)source_path(file);
     argv[n++] = printed_path;
     argv[n] = NULL;
     err_path = temp_path("roundtrip.err");
@@ -440,7 +441,7 @@ static Report check_module(const char *file, const char *stage,
     if (dump == NULL) {
         return report_fail(str_printf("oracle: %s", derr), NULL);
     }
-    theirs = (const ModuleRecords *)strmap_get(&dump->modules, file);
+    theirs = (const ModuleRecords *)strmap_get(&dump->modules, source_path(file));
     if (theirs == NULL) {
         return report_fail(xstrdup("oracle: no record for this module"), NULL);
     }
@@ -661,7 +662,7 @@ static char *read_one(int argc, char **argv, const char *command, size_t *len,
         *err = str_printf("%s takes one file", command);
         return NULL;
     }
-    src = read_text(argv[0], len, &e);
+    src = source_text(argv[0], len, &e);
     if (src == NULL) {
         *err = str_printf("%s: %s", argv[0], e);
     }

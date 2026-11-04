@@ -724,14 +724,15 @@ static Decl *data_decl(Parser *p, int newtype)
 static Decl *type_decl(Parser *p, DeclContext ctx)
 {
     Pos pos = p_pos(p);
-    int family, instance;
+    int family_kw, instance_kw;
     Decl *d;
     Ident *name;
     p_bump(p);
-    family = p_eat_varid(p, "family") || ctx == CTX_CLASS;
-    instance = p_eat_keyword(p, KW_INSTANCE) || ctx == CTX_INSTANCE;
-    if (instance) {
+    family_kw = p_eat_varid(p, "family");
+    instance_kw = p_eat_keyword(p, KW_INSTANCE);
+    if (instance_kw || ctx == CTX_INSTANCE) {
         d = decl_new(DECL_TYPE_INSTANCE, pos);
+        d->keyword = instance_kw;
         d->lhs_ty = p_btype(p);
         if (d->lhs_ty == NULL || p_expect_op(p, OP_EQUALS, "`=`") != 0) {
             return NULL;
@@ -743,12 +744,13 @@ static Decl *type_decl(Parser *p, DeclContext ctx)
     if (name == NULL) {
         return NULL;
     }
-    d = decl_new(family ? DECL_TYPE_FAMILY : DECL_TYPE_SYN, pos);
+    d = decl_new(family_kw || ctx == CTX_CLASS ? DECL_TYPE_FAMILY : DECL_TYPE_SYN, pos);
     d->name = *name;
+    d->keyword = family_kw;
     if (p_ty_var_binds(p, &d->vars) != 0) {
         return NULL;
     }
-    if (family) {
+    if (d->kind == DECL_TYPE_FAMILY) {
         if (p_eat_op(p, OP_DOUBLECOLON)) {
             d->kind_sig = p_ty(p);
             if (d->kind_sig == NULL) {

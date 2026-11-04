@@ -1,0 +1,47 @@
+/* The sizes and alignments of the C types for a 64-bit target (LP64),
+ * from the ghcautoconf.h of GHC 9.12. aihc-boot defines the platform
+ * macros itself (see src/cpp.c). */
+#pragma once
+
+#define ALIGNMENT_CHAR 1
+#define ALIGNMENT_DOUBLE 8
+#define ALIGNMENT_FLOAT 4
+#define ALIGNMENT_INT 4
+#define ALIGNMENT_INT16_T 2
+#define ALIGNMENT_INT32_T 4
+#define ALIGNMENT_INT64_T 8
+#define ALIGNMENT_INT8_T 1
+#define ALIGNMENT_LONG 8
+#define ALIGNMENT_LONG_LONG 8
+#define ALIGNMENT_SHORT 2
+#define ALIGNMENT_UINT16_T 2
+#define ALIGNMENT_UINT32_T 4
+#define ALIGNMENT_UINT64_T 8
+#define ALIGNMENT_UINT8_T 1
+#define ALIGNMENT_UNSIGNED_CHAR 1
+#define ALIGNMENT_UNSIGNED_INT 4
+#define ALIGNMENT_UNSIGNED_LONG 8
+#define ALIGNMENT_UNSIGNED_LONG_LONG 8
+#define ALIGNMENT_UNSIGNED_SHORT 2
+#define ALIGNMENT_VOID_P 8
+#define SIZEOF_CHAR 1
+#define SIZEOF_DOUBLE 8
+#define SIZEOF_FLOAT 4
+#define SIZEOF_INT 4
+#define SIZEOF_INT16_T 2
+#define SIZEOF_INT32_T 4
+#define SIZEOF_INT64_T 8
+#define SIZEOF_INT8_T 1
+#define SIZEOF_LONG 8
+#define SIZEOF_LONG_LONG 8
+#define SIZEOF_SHORT 2
+#define SIZEOF_UINT16_T 2
+#define SIZEOF_UINT32_T 4
+#define SIZEOF_UINT64_T 8
+#define SIZEOF_UINT8_T 1
+#define SIZEOF_UNSIGNED_CHAR 1
+#define SIZEOF_UNSIGNED_INT 4
+#define SIZEOF_UNSIGNED_LONG 8
+#define SIZEOF_UNSIGNED_LONG_LONG 8
+#define SIZEOF_UNSIGNED_SHORT 2
+#define SIZEOF_VOID_P 8

@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cpp.h"
 #include "manifest.h"
 #include "sys.h"
 
@@ -318,6 +319,398 @@ static int is_dep_char(char c)
            || c == '-';
 }
 
+/* --- Conditions in .cabal files ------------------------------------------ */
+
+/* GHC 9.12.3, the compiler that `impl(ghc ...)` conditions see. */
+static const unsigned long ghc_version[] = {9, 12, 3, 0};
+
+static char *lower(const char *s, size_t n)
+{
+    char *out = xstrndup(s, n);
+    char *p;
+    for (p = out; *p != '\0'; p++) {
+        if (*p >= 'A' && *p <= 'Z') {
+            *p = (char)(*p - 'A' + 'a');
+        }
+    }
+    return out;
+}
+
+/* Compare GHC_VERSION with a version such as "8.10". The missing
+ * components of the shorter version count as 0. With prefix set, compare
+ * only as many components as the version has (for `==`). */
+static int ghc_version_cmp(const char *v, int prefix)
+{
+    size_t i;
+    for (i = 0; i < 4; i++) {
+        unsigned long n = 0;
+        if (*v == '\0') {
+            return prefix ? 0 : (ghc_version[i] != 0 ? 1 : 0);
+        }
+        while (*v >= '0' && *v <= '9') {
+            n = n * 10 + (unsigned long)(*v - '0');
+            v++;
+        }
+        if (*v == '.') {
+            v++;
+        }
+        if (ghc_version[i] != n) {
+            return ghc_version[i] < n ? -1 : 1;
+        }
+    }
+    return 0;
+}
+
+/* impl(ARG): for example "ghc >= 8.0 && < 9.4". */
+static int impl_holds(const char *arg)
+{
+    const char *p = arg;
+    while (*p == ' ') {
+        p++;
+    }
+    if (strncmp(p, "ghc", 3) != 0 || is_dep_char(p[3])) {
+        return 0;
+    }
+    p += 3;
+    for (;;) {
+        const char *op;
+        size_t oplen;
+        char version[32];
+        size_t n = 0;
+        int c;
+        while (*p == ' ' || *p == '&') {
+            p++;
+        }
+        if (*p == '\0') {
+            return 1;
+        }
+        op = p;
+        while (*p == '<' || *p == '>' || *p == '=') {
+            p++;
+        }
+        oplen = (size_t)(p - op);
+        while (*p == ' ') {
+            p++;
+        }
+        while ((*p >= '0' && *p <= '9') || *p == '.') {
+            if (n + 1 < sizeof version) {
+                version[n++] = *p;
+            }
+            p++;
+        }
+        version[n] = '\0';
+        if (oplen == 0 || n == 0) {
+            return 1;
+        }
+        c = ghc_version_cmp(version, oplen == 2 && op[0] == '=');
+        if ((oplen == 2 && op[0] == '>' && c < 0) || (oplen == 2 && op[0] == '<' && c > 0)
+            || (oplen == 1 && op[0] == '>' && c <= 0) || (oplen == 1 && op[0] == '<' && c >= 0)
+            || (oplen == 2 && op[0] == '=' && c != 0)) {
+            return 0;
+        }
+    }
+}
+
+typedef struct {
+    const char *p;
+    const StrMap *flags; /* flag name -> "1" or "0" */
+} CondParser;
+
+static int cond_or(CondParser *c);
+
+static void cond_space(CondParser *c)
+{
+    while (*c->p == ' ' || *c->p == '\t') {
+        c->p++;
+    }
+}
+
+static int cond_atom(CondParser *c)
+{
+    const char *start;
+    char *name;
+    char *arg = NULL;
+    int value;
+    cond_space(c);
+    if (*c->p == '!') {
+        c->p++;
+        return !cond_atom(c);
+    }
+    if (*c->p == '(') {
+        c->p++;
+        value = cond_or(c);
+        cond_space(c);
+        if (*c->p == ')') {
+            c->p++;
+        }
+        return value;
+    }
+    start = c->p;
+    while (is_dep_char(*c->p) || *c->p == '_') {
+        c->p++;
+    }
+    name = lower(start, (size_t)(c->p - start));
+    cond_space(c);
+    if (*c->p == '(') {
+        const char *close = strchr(c->p, ')');
+        if (close == NULL) {
+            close = c->p + strlen(c->p);
+        }
+        arg = str_trim(xstrndup(c->p + 1, (size_t)(close - c->p - 1)));
+        c->p = *close == ')' ? close + 1 : close;
+    }
+    if (arg == NULL) {
+        return str_eq(name, "true");
+    }
+    if (str_eq(name, "impl")) {
+        return impl_holds(arg);
+    }
+    if (str_eq(name, "flag")) {
+        const char *v = (const char *)strmap_get(c->flags, lower(arg, strlen(arg)));
+        return v == NULL || str_eq(v, "1");
+    }
+    if (str_eq(name, "os")) {
+        char *os = lower(arg, strlen(arg));
+        return !(str_eq(os, "windows") || str_eq(os, "mingw32") || str_eq(os, "ghcjs")
+                 || str_eq(os, "wasi"));
+    }
+    if (str_eq(name, "arch")) {
+        char *arch = lower(arg, strlen(arg));
+        return !(str_eq(arch, "javascript") || str_eq(arch, "wasm32"));
+    }
+    return 1;
+}
+
+static int cond_and(CondParser *c)
+{
+    int value = cond_atom(c);
+    for (;;) {
+        cond_space(c);
+        if (c->p[0] != '&' || c->p[1] != '&') {
+            return value;
+        }
+        c->p += 2;
+        value = cond_atom(c) && value;
+    }
+}
+
+static int cond_or(CondParser *c)
+{
+    int value = cond_and(c);
+    for (;;) {
+        cond_space(c);
+        if (c->p[0] != '|' || c->p[1] != '|') {
+            return value;
+        }
+        c->p += 2;
+        value = cond_and(c) || value;
+    }
+}
+
+static int cond_holds(const char *text, const StrMap *flags)
+{
+    CondParser c;
+    c.p = text;
+    c.flags = flags;
+    return cond_or(&c);
+}
+
+/* The fields of one stanza that the CPP step needs. */
+typedef struct {
+    Vec cpp_options;
+    Vec include_dirs;
+    Vec imports;
+} StanzaFields;
+
+/* An open `if` block. */
+typedef struct {
+    size_t indent;
+    int parent; /* the enclosing blocks are active */
+    int cond;   /* the current branch is taken */
+    int taken;  /* some branch of this `if` was taken */
+} CondBlock;
+
+/* Add the words of a value to out. Words end at white space and at
+ * commas when commas is set. */
+static void add_words(Vec *out, const char *value, int commas)
+{
+    const char *p = value;
+    for (;;) {
+        const char *start;
+        while (*p == ' ' || *p == '\t' || (commas && *p == ',')) {
+            p++;
+        }
+        if (*p == '\0') {
+            return;
+        }
+        start = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t' && !(commas && *p == ',')) {
+            p++;
+        }
+        vec_push(out, xstrndup(start, (size_t)(p - start)));
+    }
+}
+
+static void stanza_add(StanzaFields *s, const char *field, const char *value)
+{
+    if (str_eq(field, "cpp-options")) {
+        add_words(&s->cpp_options, value, 0);
+    } else if (str_eq(field, "include-dirs")) {
+        add_words(&s->include_dirs, value, 1);
+    } else if (str_eq(field, "import")) {
+        add_words(&s->imports, value, 1);
+    }
+}
+
+static void collect_stanza(const StrMap *stanzas, const char *name, CabalPackage *package,
+                           Vec *seen)
+{
+    const StanzaFields *s = (const StanzaFields *)strmap_get(stanzas, name);
+    size_t i;
+    if (s == NULL || vec_has_str(seen, name)) {
+        return;
+    }
+    vec_push(seen, (char *)name);
+    for (i = 0; i < s->cpp_options.len; i++) {
+        vec_push(&package->cpp_options, s->cpp_options.items[i]);
+    }
+    for (i = 0; i < s->include_dirs.len; i++) {
+        vec_push(&package->include_dirs, s->include_dirs.items[i]);
+    }
+    for (i = 0; i < s->imports.len; i++) {
+        char *common = str_concat("common ", lower((const char *)s->imports.items[i],
+                                                   strlen((const char *)s->imports.items[i])));
+        collect_stanza(stanzas, common, package, seen);
+    }
+}
+
+/* Fill package->cpp_options and package->include_dirs from the main
+ * library and the common stanzas that it imports. */
+static void cabal_library_fields(const char *text, CabalPackage *package)
+{
+    Vec lines = str_lines(text);
+    StrMap flags;
+    StrMap stanzas;
+    StanzaFields *current = NULL;
+    Vec blocks;
+    Vec seen;
+    char *flag = NULL;
+    char *field = NULL;
+    size_t field_indent = 0;
+    size_t i;
+    strmap_init(&flags);
+    strmap_init(&stanzas);
+    vec_init(&blocks);
+    vec_init(&seen);
+    /* The default of every flag. */
+    for (i = 0; i < lines.len; i++) {
+        const char *raw = (const char *)lines.items[i];
+        char *t = str_trim(raw);
+        if (t[0] == '\0') {
+            continue;
+        }
+        if (raw[0] != ' ' && raw[0] != '\t') {
+            char *l = lower(t, strlen(t));
+            flag = NULL;
+            if (strncmp(l, "flag ", 5) == 0 || strncmp(l, "flag\t", 5) == 0) {
+                flag = str_trim(l + 5);
+                strmap_put(&flags, flag, (void *)"1");
+            }
+        } else if (flag != NULL) {
+            char *l = lower(t, strlen(t));
+            if (strncmp(l, "default", 7) == 0 && strchr(l, ':') != NULL) {
+                char *v = str_trim(strchr(l, ':') + 1);
+                strmap_put(&flags, flag, (void *)(str_eq(v, "true") ? "1" : "0"));
+            }
+        }
+    }
+    for (i = 0; i < lines.len; i++) {
+        const char *raw = (const char *)lines.items[i];
+        const char *comment = strstr(raw, "--");
+        char *line = trim_end(comment ? xstrndup(raw, (size_t)(comment - raw)) : raw);
+        char *t = str_trim(line);
+        size_t indent;
+        char *l;
+        const char *colon;
+        int active;
+        size_t k;
+        if (t[0] == '\0') {
+            continue;
+        }
+        indent = ws_start(line);
+        if (indent == 0) {
+            char *header = lower(t, strlen(t));
+            current = (StanzaFields *)xcalloc(1, sizeof *current);
+            vec_init(&current->cpp_options);
+            vec_init(&current->include_dirs);
+            vec_init(&current->imports);
+            /* Normalize the white space: "common  x" is "common x". */
+            {
+                Vec words;
+                StrBuf b;
+                vec_init(&words);
+                add_words(&words, header, 0);
+                sb_init(&b);
+                for (k = 0; k < words.len; k++) {
+                    if (k > 0) {
+                        sb_putc(&b, ' ');
+                    }
+                    sb_puts(&b, (const char *)words.items[k]);
+                }
+                strmap_put(&stanzas, sb_take(&b), current);
+            }
+            blocks.len = 0;
+            field = NULL;
+            continue;
+        }
+        if (current == NULL) {
+            continue;
+        }
+        if (field != NULL && indent > field_indent) {
+            stanza_add(current, field, t);
+            continue;
+        }
+        field = NULL;
+        l = lower(t, strlen(t));
+        if (str_eq(l, "else") || strncmp(l, "elif ", 5) == 0) {
+            while (blocks.len > 0 && ((CondBlock *)vec_last(&blocks))->indent > indent) {
+                vec_pop(&blocks);
+            }
+            if (blocks.len > 0 && ((CondBlock *)vec_last(&blocks))->indent == indent) {
+                CondBlock *b = (CondBlock *)vec_last(&blocks);
+                b->cond = !b->taken && (str_eq(l, "else") || cond_holds(t + 4, &flags));
+                b->taken = b->taken || b->cond;
+            }
+            continue;
+        }
+        while (blocks.len > 0 && ((CondBlock *)vec_last(&blocks))->indent >= indent) {
+            vec_pop(&blocks);
+        }
+        active = 1;
+        for (k = 0; k < blocks.len; k++) {
+            const CondBlock *b = (const CondBlock *)blocks.items[k];
+            active = active && b->parent && b->cond;
+        }
+        if (strncmp(l, "if ", 3) == 0 || strncmp(l, "if(", 3) == 0) {
+            CondBlock *b = (CondBlock *)xmalloc(sizeof *b);
+            b->indent = indent;
+            b->parent = active;
+            b->cond = cond_holds(t + 2, &flags);
+            b->taken = b->cond;
+            vec_push(&blocks, b);
+            continue;
+        }
+        colon = strchr(t, ':');
+        if (colon == NULL || !active) {
+            continue;
+        }
+        field = str_trim(lower(t, (size_t)(colon - t)));
+        field_indent = indent;
+        stanza_add(current, field, colon + 1);
+    }
+    collect_stanza(&stanzas, "library", package, &seen);
+}
+
 CabalPackage *cabal_parse(const char *text)
 {
     CabalPackage *package = (CabalPackage *)xmalloc(sizeof *package);
@@ -325,12 +718,20 @@ CabalPackage *cabal_parse(const char *text)
     size_t i;
     size_t j;
     package->language = NULL;
+    package->version = NULL;
     vec_init(&package->extensions);
     strmap_init(&package->depends);
+    vec_init(&package->cpp_options);
+    vec_init(&package->include_dirs);
+    cabal_library_fields(text, package);
     for (i = 0; i < fs.len; i++) {
         const CabalField *f = (const CabalField *)fs.items[i];
         const char *value = f->value.s ? f->value.s : "";
-        if (str_eq(f->name, "build-depends")) {
+        if (str_eq(f->name, "version")) {
+            if (package->version == NULL) {
+                package->version = str_trim(value);
+            }
+        } else if (str_eq(f->name, "build-depends")) {
             Vec items = str_split(value, ',');
             for (j = 0; j < items.len; j++) {
                 char *item = str_trim((const char *)items.items[j]);
@@ -558,7 +959,7 @@ char *manifest(const char *target, char **out)
         }
         files = haskell_files(package_dir(name));
         for (j = 0; j < files.len; j++) {
-            sb_printf(&b, "module %s\n", (const char *)files.items[j]);
+            sb_printf(&b, "module %s\n", source_path((const char *)files.items[j]));
         }
     }
     sb_printf(&b, "report %s\n", target);
@@ -595,7 +996,7 @@ char *program(const char *target, Program **out, Vec *packages_out)
             const char *file = (const char *)files.items[j];
             size_t len;
             char *err;
-            char *src = read_text(file, &len, &err);
+            char *src = source_text(file, &len, &err);
             SyntaxError serr;
             Module *module;
             SourceModule *source;

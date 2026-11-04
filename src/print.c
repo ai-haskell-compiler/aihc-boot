@@ -560,7 +560,7 @@ static void pr_decl(StrBuf *out, const Decl *d)
         pr_ty(out, d->ty);
         break;
     case DECL_TYPE_FAMILY:
-        sb_puts(out, "type ");
+        sb_puts(out, d->keyword ? "type family " : "type ");
         sb_puts(out, d->name.name);
         pr_binders(out, &d->vars);
         if (d->kind_sig) {
@@ -569,7 +569,7 @@ static void pr_decl(StrBuf *out, const Decl *d)
         }
         break;
     case DECL_TYPE_INSTANCE:
-        sb_puts(out, "type ");
+        sb_puts(out, d->keyword ? "type instance " : "type ");
         pr_ty(out, d->lhs_ty);
         sb_puts(out, " = ");
         pr_ty(out, d->ty);

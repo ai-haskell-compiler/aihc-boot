@@ -1,0 +1,34 @@
+1:1	{-# LANGUAGE CPP #-}
+4:1	module
+4:8	Cpp
+4:12	where
+7:1	{(virtual)
+7:1	ghc
+7:5	::
+7:8	Int
+8:1	;(virtual)
+8:1	ghc
+8:5	=
+8:7	912
+15:1	;(virtual)
+15:1	base
+15:6	::
+15:9	Bool
+16:1	;(virtual)
+16:1	base
+16:6	=
+16:8	True
+20:1	;(virtual)
+20:1	four
+20:6	::
+20:9	Int
+21:1	;(virtual)
+21:1	four
+21:6	=
+21:8	(
+21:9	2
+21:11	+
+21:13	2
+21:14	)
+22:1	}(virtual)
+22:1	<end of input>

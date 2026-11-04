@@ -17,8 +17,8 @@ instance C Int where {
   type F Int = Bool};
 instance forall a. Show a => C [a] where {};
 type F = forall a. (Eq a, Show a) => [a] -> (a, Maybe a) -> M.T @k '[a] (t :: k) _ "s" (a `E` b) (a ~ b) 'Just '[] ((->) a) (,) () '[Int, Bool] 3;
-type G (a :: Type) :: Type;
-type G Int = Char;
+type family G (a :: Type) :: Type;
+type instance G Int = Char;
 f x (Just y) = x;
 (<+>) a b = a;
 x `plus` y = x;

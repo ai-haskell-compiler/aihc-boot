@@ -74,8 +74,9 @@
 
     # Just enough to run the progress tracker (used by the scheduled
     # workflow). The two reference tools are part of it, because M3 and M4
-    # count modules through them.
-    trackerTools = pkgs: [pkgs.python3 pkgs.git pkgs.bash (aihcParse pkgs) (resolveOracle pkgs)];
+    # count modules through them. aihc-boot runs clang as the C
+    # preprocessor for modules with the CPP extension.
+    trackerTools = pkgs: [pkgs.python3 pkgs.git pkgs.bash pkgs.clang (aihcParse pkgs) (resolveOracle pkgs)];
 
     # The boot compiler itself: plain C89, built with make. `make check`
     # runs the golden tests and the round trip over the vendored tree.
@@ -88,6 +89,8 @@
         src = self;
         doCheck = true;
         checkTarget = "check";
+        # The round trip in `make check` preprocesses the CPP modules.
+        nativeCheckInputs = [pkgs.clang];
         installPhase = ''
           install -D build/aihc-boot $out/bin/aihc-boot
         '';
