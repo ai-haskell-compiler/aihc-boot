@@ -100,6 +100,9 @@ int uc_is_alphabetic(unsigned long c);
 int uc_is_alphanumeric(unsigned long c);
 int uc_is_uppercase(unsigned long c);
 int uc_is_control(unsigned long c);
+/* The general category of a code point, as the index of its constructor
+ * in Data.Char.GeneralCategory (0 UppercaseLetter, ..., 29 NotAssigned). */
+int uc_general_category(unsigned long c);
 
 /* --- Files ------------------------------------------------------------- */
 

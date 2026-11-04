@@ -29,6 +29,7 @@ module Prelude
     (<$>),
     Applicative (pure, (<*>), (*>), (<*), liftA2),
     Monad ((>>=), (>>), return),
+    MonadFail (fail),
     (=<<),
     Foldable (foldMap, foldr, foldl, foldl', foldr1, foldl1, elem, maximum, minimum, sum, product, null, length),
     Traversable (traverse, sequenceA, mapM, sequence),
@@ -120,6 +121,7 @@ module Prelude
   )
 where
 
+import Control.Monad.Fail (MonadFail (..))
 import Data.Either
 import Data.Foldable
 import Data.List (lines, unlines, unwords, words)

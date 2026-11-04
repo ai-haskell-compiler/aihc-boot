@@ -674,6 +674,11 @@ static Obj *p_char_ge(Obj **a) { return make_bool(char_of(a[0]) >= char_of(a[1])
 
 static Obj *p_ord(Obj **a) { return make_int((long)char_of(a[0])); }
 
+static Obj *p_general_category(Obj **a)
+{
+    return make_int((long)uc_general_category(char_of(a[0])));
+}
+
 static Obj *p_chr(Obj **a)
 {
     long i = int_of(a[0]);
@@ -1563,6 +1568,7 @@ static const PrimInfo prims[] = {
     {"charGe", 2, 3, p_char_ge},
     {"ord", 1, 1, p_ord},
     {"chr", 1, 1, p_chr},
+    {"generalCategory", 1, 1, p_general_category},
     {"intShow", 1, 1, p_int_show},
     {"raise", 1, 0, p_raise},
     {"catch", 3, 0, p_catch},
