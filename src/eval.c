@@ -530,16 +530,19 @@ static unsigned long char_of(const Obj *o)
     return W(o)[0].u;
 }
 
-/* A constructor application with one field: `IORes x`. */
+/* The result of an IO primitive: `(# s, x #)`, with the unit value as the
+ * state token. */
 static Obj *io_result(Obj *x)
 {
     Obj *o;
+    Obj *s = nullary(prog->con_unit);
     root_push(&x);
-    reserve(3);
+    reserve(4);
     root_pop();
-    o = alloc(O_CON, 2);
+    o = alloc(O_CON, 3);
     W(o)[0].c = prog->con_iores;
-    W(o)[1].p = x;
+    W(o)[1].p = s;
+    W(o)[2].p = x;
     return o;
 }
 
@@ -1476,6 +1479,103 @@ static Obj *p_catch(Obj **a)
     return action;
 }
 
+/* --- Mutable cells --------------------------------------------------------
+ *
+ * A MutVar# or an MVar# is a constructor object with one field, which the
+ * primitives overwrite. An empty MVar# has a NULL field. The collector
+ * copies these objects as any other constructor. */
+
+static ConInfo con_mutvar = {"MutVar#", 0, 1, 0, {NULL, 0, 0}, NULL, NULL};
+static ConInfo con_mvar = {"MVar#", 0, 1, 0, {NULL, 0, 0}, NULL, NULL};
+
+static Obj *new_cell(ConInfo *con, Obj *value)
+{
+    Obj *o;
+    root_push(&value);
+    reserve(2);
+    root_pop();
+    o = alloc(O_CON, 2);
+    W(o)[0].c = con;
+    W(o)[1].p = value;
+    return o;
+}
+
+static Obj *cell_of(Obj *o, ConInfo *con)
+{
+    if (KIND(o) != O_CON || (const ConInfo *)W(o)[0].c != con) {
+        runtime_error("internal error: not a mutable cell");
+    }
+    return o;
+}
+
+/* The state token that a primitive with no result gives back. */
+static Obj *state_token(void)
+{
+    return nullary(prog->con_unit);
+}
+
+static Obj *p_ptr_eq(Obj **a)
+{
+    return make_int(a[0] == a[1]);
+}
+
+static Obj *p_mutvar_new(Obj **a)
+{
+    return io_result(new_cell(&con_mutvar, a[0]));
+}
+
+static Obj *p_mutvar_read(Obj **a)
+{
+    return io_result(W(cell_of(a[0], &con_mutvar))[1].p);
+}
+
+static Obj *p_mutvar_write(Obj **a)
+{
+    W(cell_of(a[0], &con_mutvar))[1].p = a[1];
+    return state_token();
+}
+
+static Obj *p_mvar_new(Obj **a)
+{
+    (void)a;
+    return io_result(new_cell(&con_mvar, NULL));
+}
+
+static Obj *p_mvar_take(Obj **a)
+{
+    Obj *m = cell_of(a[0], &con_mvar);
+    Obj *v = W(m)[1].p;
+    if (v == NULL) {
+        runtime_error("thread blocked indefinitely in an MVar operation");
+    }
+    W(m)[1].p = NULL;
+    return io_result(v);
+}
+
+static Obj *p_mvar_read(Obj **a)
+{
+    Obj *v = W(cell_of(a[0], &con_mvar))[1].p;
+    if (v == NULL) {
+        runtime_error("thread blocked indefinitely in an MVar operation");
+    }
+    return io_result(v);
+}
+
+static Obj *p_mvar_put(Obj **a)
+{
+    Obj *m = cell_of(a[0], &con_mvar);
+    if (W(m)[1].p != NULL) {
+        runtime_error("thread blocked indefinitely in an MVar operation");
+    }
+    W(m)[1].p = a[1];
+    return state_token();
+}
+
+static Obj *p_mvar_is_empty(Obj **a)
+{
+    return io_result(make_int(W(cell_of(a[0], &con_mvar))[1].p == NULL));
+}
+
 static Obj *p_put_char(Obj **a)
 {
     StrBuf b;
@@ -1545,6 +1645,12 @@ static Obj *p_unsafe_coerce(Obj **a)
     return a[0];
 }
 
+/* The primitives: name, arity, the mask of the arguments to evaluate
+ * first, and the code. A primitive on a state token (an IO action or a
+ * primop of GHC.Exts) evaluates the token first. A `case` on an unlifted
+ * value does not evaluate it in the untyped Core, so the token carries
+ * the order of the effects: the token of each primitive is the result of
+ * the primitive before it. */
 static const PrimInfo prims[] = {
     {"intAdd", 2, 3, p_int_add},
     {"intSub", 2, 3, p_int_sub},
@@ -1569,9 +1675,18 @@ static const PrimInfo prims[] = {
     {"ord", 1, 1, p_ord},
     {"chr", 1, 1, p_chr},
     {"generalCategory", 1, 1, p_general_category},
+    {"ptrEq", 2, 0, p_ptr_eq},
+    {"mutVarNew", 2, 2, p_mutvar_new},
+    {"mutVarRead", 2, 3, p_mutvar_read},
+    {"mutVarWrite", 3, 5, p_mutvar_write},
+    {"mvarNew", 1, 1, p_mvar_new},
+    {"mvarTake", 2, 3, p_mvar_take},
+    {"mvarRead", 2, 3, p_mvar_read},
+    {"mvarPut", 3, 5, p_mvar_put},
+    {"mvarIsEmpty", 2, 3, p_mvar_is_empty},
     {"intShow", 1, 1, p_int_show},
     {"raise", 1, 0, p_raise},
-    {"catch", 3, 0, p_catch},
+    {"catch", 3, 4, p_catch},
     {"integerFromInt", 1, 1, p_integer_from_int},
     {"integerToInt", 1, 1, p_integer_to_int},
     {"integerAdd", 2, 3, p_integer_add},
@@ -1589,9 +1704,9 @@ static const PrimInfo prims[] = {
     {"integerLe", 2, 3, p_integer_le},
     {"integerGt", 2, 3, p_integer_gt},
     {"integerGe", 2, 3, p_integer_ge},
-    {"putChar", 2, 1, p_put_char},
-    {"getChar", 1, 0, p_get_char},
-    {"flush", 1, 0, p_flush},
+    {"putChar", 2, 3, p_put_char},
+    {"getChar", 1, 1, p_get_char},
+    {"flush", 1, 1, p_flush},
     {"whnf", 1, 1, p_whnf},
     {"unsafeCoerce", 1, 0, p_unsafe_coerce},
     {"intAnd", 2, 3, p_int_and},
@@ -1610,22 +1725,22 @@ static const PrimInfo prims[] = {
     {"wordQuot", 2, 3, p_word_quot},
     {"wordRem", 2, 3, p_word_rem},
     {"wordShow", 1, 1, p_word_show},
-    {"malloc", 2, 1, p_malloc},
-    {"peek8", 3, 3, p_peek8},
-    {"peek16", 3, 3, p_peek16},
-    {"peek32", 3, 3, p_peek32},
-    {"peek64", 3, 3, p_peek64},
-    {"poke8", 4, 7, p_poke8},
-    {"poke16", 4, 7, p_poke16},
-    {"poke32", 4, 7, p_poke32},
-    {"poke64", 4, 7, p_poke64},
-    {"memcpy", 4, 7, p_memcpy},
-    {"memmove", 4, 7, p_memmove},
-    {"memset", 4, 7, p_memset},
-    {"memcmp", 4, 7, p_memcmp},
-    {"fileSize", 2, 0, p_file_size},
-    {"readFileInto", 4, 6, p_read_file_into},
-    {"writeFileFrom", 5, 14, p_write_file_from},
+    {"malloc", 2, 3, p_malloc},
+    {"peek8", 3, 7, p_peek8},
+    {"peek16", 3, 7, p_peek16},
+    {"peek32", 3, 7, p_peek32},
+    {"peek64", 3, 7, p_peek64},
+    {"poke8", 4, 15, p_poke8},
+    {"poke16", 4, 15, p_poke16},
+    {"poke32", 4, 15, p_poke32},
+    {"poke64", 4, 15, p_poke64},
+    {"memcpy", 4, 15, p_memcpy},
+    {"memmove", 4, 15, p_memmove},
+    {"memset", 4, 15, p_memset},
+    {"memcmp", 4, 15, p_memcmp},
+    {"fileSize", 2, 2, p_file_size},
+    {"readFileInto", 4, 14, p_read_file_into},
+    {"writeFileFrom", 5, 30, p_write_file_from},
     {NULL, 0, 0, NULL}
 };
 
@@ -2172,8 +2287,8 @@ char *eval_run(CoreProgram *program)
     hp = heap;
     init_small_values();
     init_globals();
-    /* main is an IO action: a function from the world to `IORes a`. The
-     * world is the unit value. */
+    /* main is an IO action: a function from the state token to
+     * `(# State# RealWorld, a #)`. The token is the unit value. */
     {
         Vec none;
         Core *app;
@@ -2185,6 +2300,13 @@ char *eval_run(CoreProgram *program)
         W(start)[0].c = app;
         W(start)[1].p = NULL;
         result = run(start);
+        /* Force the final state token too: the last effects of main
+         * hang from it. */
+        if (KIND(result) == O_CON && (const ConInfo *)W(result)[0].c == prog->con_iores) {
+            root_push(&result);
+            (void)force(W(result)[1].p);
+            root_pop();
+        }
     }
     fflush(stdout);
     if (KIND(result) != O_CON || (const ConInfo *)W(result)[0].c != prog->con_iores) {

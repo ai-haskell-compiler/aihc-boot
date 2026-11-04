@@ -29,7 +29,7 @@ typedef struct {
     ConInfo *con_nil;
     ConInfo *con_cons;
     ConInfo *con_unit;
-    ConInfo *con_iores; /* the result of an IO action: `IORes a` */
+    ConInfo *con_iores; /* the result of an IO action: `(# s, a #)` */
 } CoreProgram;
 
 /* Desugar the modules that Main reaches. packages holds Package * (see

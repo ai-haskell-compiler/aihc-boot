@@ -1,6 +1,9 @@
--- | Machine addresses. A 'Ptr' is an Int at run time.
+{-# LANGUAGE MagicHash #-}
+
+-- | Machine addresses. As in GHC, a 'Ptr' holds an 'Addr#', and an
+-- 'Addr#' is an Int at run time.
 module GHC.Ptr
-  ( Ptr,
+  ( Ptr (..),
     nullPtr,
     castPtr,
     plusPtr,
@@ -18,7 +21,7 @@ import GHC.Show
 import GHC.Types
 
 -- | An address of a value of type a.
-data Ptr a
+data Ptr a = Ptr Addr#
 
 ptrToInt :: Ptr a -> Int
 ptrToInt = primUnsafeCoerce

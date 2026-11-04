@@ -80,6 +80,10 @@ instance Show Int where
       then '(' : primIntShow n `append` (')' : s)
       else primIntShow n `append` s
 
+-- | Unsigned machine words, in decimal.
+instance Show Word where
+  showsPrec _ a = showString (primWordShow (primUnsafeCoerce a))
+
 instance Show Char where
   showsPrec _ '\'' = showString "'\\''"
   showsPrec _ c = \s -> '\'' : showLitChar c ('\'' : s)

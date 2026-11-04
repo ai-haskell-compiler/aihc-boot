@@ -275,6 +275,8 @@ const Entity *tc_entity(Tc *tc, const QName *name, Space space);
 TcVal *tc_value(Tc *tc, const char *module, const char *name);
 TcCon *tc_con(Tc *tc, const QName *name);
 TcTyCon *tc_tuple(Tc *tc, size_t n);
+/* A boxed tuple type, or an unboxed one `(# ... #)` with unboxed set. */
+TcTyCon *tc_tuple_of(Tc *tc, size_t n, int unboxed);
 TcTyCon *tc_known_tycon(Tc *tc, const char *module, const char *name);
 TcClass *tc_known_class(Tc *tc, const char *module, const char *name);
 Ty *tc_known_type(Tc *tc, const char *module, const char *name);

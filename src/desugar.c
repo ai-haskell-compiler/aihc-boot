@@ -234,6 +234,41 @@ static TypeInfo *type_new_info(Ds *ds, const char *module, const char *name, int
     return t;
 }
 
+/* Whether a data declaration is a box of a primitive value, such as
+ * `data Int = I# Int#`: one constructor with one field, whose type is a
+ * primitive type, by GHC's convention a name that ends in `#`. Int and
+ * Int# then have the same representation, so the primitives of the
+ * evaluator work on both. */
+static int is_box(const Decl *d)
+{
+    const ConDecl *c;
+    const Type *t;
+    size_t n;
+    if (d->newtype || d->cons.len != 1) {
+        return 0;
+    }
+    c = (const ConDecl *)d->cons.items[0];
+    if (c->forall.len > 0 || c->ctx != NULL) {
+        return 0;
+    }
+    if (c->kind == CON_PREFIX && c->args.len == 1) {
+        t = ((const BangType *)c->args.items[0])->ty;
+    } else if (c->kind == CON_RECORD && c->fields.len == 1
+               && ((const Field *)c->fields.items[0])->names.len == 1) {
+        t = ((const Field *)c->fields.items[0])->ty.ty;
+    } else {
+        return 0;
+    }
+    while (t->kind == TY_APP || t->kind == TY_PAREN) {
+        t = t->a;
+    }
+    if (t->kind != TY_CON) {
+        return 0;
+    }
+    n = strlen(t->con.name);
+    return n > 1 && t->con.name[n - 1] == '#';
+}
+
 /* The tuple constructor of n components: `()`, `(,)`, `(,,)` and so on.
  * A tuple has no module: it is syntax. */
 static ConInfo *tuple_con(Ds *ds, size_t n)
@@ -252,6 +287,33 @@ static ConInfo *tuple_con(Ds *ds, size_t n)
     con = (ConInfo *)strmap_get(&ds->tuples, name);
     if (con == NULL) {
         TypeInfo *t = type_new_info(ds, "GHC.Tuple", name, 0);
+        con = con_new(t, name, (int)n);
+        strmap_put(&ds->tuples, name, con);
+    }
+    return con;
+}
+
+/* The constructor of an unboxed tuple of n components. It is a separate
+ * constructor from the boxed tuple, as in the typechecker. */
+static ConInfo *utuple_con(Ds *ds, size_t n)
+{
+    StrBuf b;
+    char *name;
+    ConInfo *con;
+    size_t i;
+    sb_init(&b);
+    sb_puts(&b, "(#");
+    if (n == 1) {
+        sb_putc(&b, ' ');
+    }
+    for (i = 1; i < n; i++) {
+        sb_putc(&b, ',');
+    }
+    sb_puts(&b, "#)");
+    name = sb_take(&b);
+    con = (ConInfo *)strmap_get(&ds->tuples, name);
+    if (con == NULL) {
+        TypeInfo *t = type_new_info(ds, "GHC.Prim", name, 0);
         con = con_new(t, name, (int)n);
         strmap_put(&ds->tuples, name, con);
     }
@@ -497,7 +559,7 @@ static long parse_integer(Ds *ds, const char *raw)
         base = 2;
         p += 2;
     }
-    for (; *p != '\0'; p++) {
+    for (; *p != '\0' && *p != '#'; p++) {
         int digit;
         if (*p == '_') {
             continue;
@@ -638,7 +700,7 @@ static int con_pattern(Ds *ds, const Pat *p, ConInfo **con, Vec *subs)
         }
         break;
     case PAT_TUPLE:
-        *con = tuple_con(ds, p->args.len);
+        *con = p->unboxed ? utuple_con(ds, p->args.len) : tuple_con(ds, p->args.len);
         for (i = 0; i < p->args.len; i++) {
             vec_push(subs, p->args.items[i]);
         }
@@ -950,6 +1012,13 @@ static Core *match(Ds *ds, Pat **pats, VarRef *vars, size_t n, Cont cont, void *
         CoreAlt *alt;
         con_pattern(ds, p, &con, &subs);
         subvars = (VarRef *)xmalloc((subs.len + 1) * sizeof *subvars);
+        if (con->type->box) {
+            /* As for a newtype, but the match evaluates the value, as a
+             * match on a data constructor does. */
+            Pat *bang = pat_new(PAT_BANG);
+            bang->a = (Pat *)subs.items[0];
+            subs.items[0] = bang;
+        }
         if (con->type->newtype) {
             /* The constructor is erased: match the inner pattern on the
              * same value. */
@@ -2026,7 +2095,8 @@ static Core *ds_expr_inner(Ds *ds, const Expr *x)
         for (i = 0; i < x->items.len; i++) {
             vec_push(&items, ds_expr(ds, (const Expr *)x->items.items[i]));
         }
-        return core_con(tuple_con(ds, x->items.len), &items);
+        return core_con(x->unboxed ? utuple_con(ds, x->items.len) : tuple_con(ds, x->items.len),
+                        &items);
     }
     case EXPR_TUPLE_SECTION: {
         /* `(, e)` is `\a -> (a, e)`. */
@@ -2189,7 +2259,9 @@ static void declare_module(Ds *ds, const ModSrc *src)
         ds->pos = d->pos;
         switch (d->kind) {
         case DECL_DATA: {
-            TypeInfo *t = type_new_info(ds, src->name, d->name.name, d->newtype);
+            int box = is_box(d);
+            TypeInfo *t = type_new_info(ds, src->name, d->name.name, d->newtype || box);
+            t->box = box;
             for (j = 0; j < d->cons.len; j++) {
                 const ConDecl *c = (const ConDecl *)d->cons.items[j];
                 int arity;
@@ -2545,7 +2617,8 @@ char *desugar_program(const Program *p, const Tc *tc, const Vec *packages, CoreP
     out->con_true = known_con(&ds, "GHC.Types", "True");
     out->con_nil = known_con(&ds, "GHC.Types", "[]");
     out->con_cons = known_con(&ds, "GHC.Types", ":");
-    out->con_iores = known_con(&ds, "GHC.Types", "IORes");
+    /* An IO action returns `(# State# RealWorld, a #)`. */
+    out->con_iores = utuple_con(&ds, 2);
     out->con_unit = tuple_con(&ds, 0);
     for (i = 0; i < reached.len; i++) {
         define_module(&ds, (const ModSrc *)reached.items[i]);

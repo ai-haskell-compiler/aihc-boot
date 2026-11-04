@@ -200,6 +200,50 @@ static unsigned long bind_local(Resolver *r, const char *name)
 }
 
 static ResolveError *ty(Resolver *r, const Type *t);
+
+/* The primitive type of a MagicHash literal (`1#` is Int#, `1##` Word#,
+ * `1.0#` Float#, `1.0##` Double#, `'c'#` Char#, `"s"#` Addr#), or NULL
+ * for an ordinary literal. */
+static const char *hash_literal_type(const Literal *lit)
+{
+    size_t n = strlen(lit->raw);
+    int hashes = 0;
+    while (n > 0 && lit->raw[n - 1] == '#') {
+        n--;
+        hashes++;
+    }
+    if (hashes == 0) {
+        return NULL;
+    }
+    switch (lit->kind) {
+    case LIT_INTEGER:
+        return hashes == 2 ? "Word#" : "Int#";
+    case LIT_FLOAT:
+        return hashes == 2 ? "Double#" : "Float#";
+    case LIT_CHAR:
+        return "Char#";
+    case LIT_STRING:
+        return "Addr#";
+    }
+    return NULL;
+}
+
+/* As in aihc-resolve, a MagicHash literal has one record: its primitive
+ * type, from the builtin modules. Returns 0 for an ordinary literal. */
+static int hash_literal(Resolver *r, const Literal *lit, Span s)
+{
+    const char *type = hash_literal_type(lit);
+    Target t;
+    if (type == NULL) {
+        return 0;
+    }
+    t = program_builtin(r->program, r->module, SPACE_TYPE, type);
+    if (t.kind != TARGET_ERROR) {
+        emit(r, span(s), NS_TYPE, t);
+    }
+    return 1;
+}
+
 static ResolveError *sig_type(Resolver *r, const Type *t, const Vec *names);
 static ResolveError *bind_tyvars(Resolver *r, const Vec *binders);
 static size_t push_sig_scope(Resolver *r, const char *name);
@@ -491,6 +535,12 @@ static ResolveError *top_decl(Resolver *r, const Decl *decl)
     }
     case DECL_PAT_SYN:
         return pattern_synonym(r, decl);
+    case DECL_TYPE_INSTANCE:
+        /* As in aihc-resolve: both sides as types. */
+        if ((e = ty(r, decl->lhs_ty)) != NULL) {
+            return e;
+        }
+        return ty(r, decl->ty);
     case DECL_FOREIGN:
         /* As in aihc-resolve, the binder's span starts where the
          * declaration starts. */
@@ -584,6 +634,9 @@ static ResolveError *top_decl(Resolver *r, const Decl *decl)
                 break;
             case DECL_TYPE_SIG:
                 e = ty(r, item->ty);
+                break;
+            case DECL_TYPE_INSTANCE:
+                e = top_decl(r, item);
                 break;
             default:
                 e = unsupported("this instance item", &item->pos);
@@ -891,9 +944,6 @@ static ResolveError *pat(Resolver *r, const Pat *p, LocalVec *bound)
         return NULL;
     case PAT_TUPLE:
     case PAT_LIST:
-        if (p->unboxed) {
-            return unsupported("an unboxed tuple pattern", NULL);
-        }
         for (i = 0; i < p->args.len; i++) {
             if ((e = pat(r, (const Pat *)p->args.items[i], bound)) != NULL) {
                 return e;
@@ -957,6 +1007,9 @@ static ResolveError *pat(Resolver *r, const Pat *p, LocalVec *bound)
         /* As for a literal expression, plus the `==` of the comparison
          * and the `negate` of a negative literal. A character or string
          * literal has no annotation without OverloadedStrings. */
+        if (hash_literal(r, &p->lit, p->span)) {
+            return NULL;
+        }
         if (p->lit.kind == LIT_INTEGER || p->lit.kind == LIT_FLOAT) {
             const char *conversion = p->lit.kind == LIT_INTEGER ? "fromInteger"
                                                                 : "fromRational";
@@ -1048,6 +1101,9 @@ static ResolveError *expr(Resolver *r, const Expr *x)
          * also names the `Integer` type when a builtin module exports
          * it. A string literal keeps its type: the resolver does not
          * handle OverloadedStrings yet. */
+        if (hash_literal(r, &x->lit, x->span)) {
+            return NULL;
+        }
         if (x->lit.kind == LIT_INTEGER) {
             Target integer = program_builtin(r->program, r->module, SPACE_TYPE, "Integer");
             if (integer.kind != TARGET_ERROR) {
@@ -1070,9 +1126,6 @@ static ResolveError *expr(Resolver *r, const Expr *x)
         return expr(r, x->c);
     case EXPR_LIST:
     case EXPR_TUPLE:
-        if (x->unboxed) {
-            return unsupported("an unboxed tuple", &x->span.start);
-        }
         /* The list and tuple constructors are syntax, reported at the
          * span of the whole expression. */
         for (i = 0; i < x->items.len; i++) {
@@ -1385,9 +1438,6 @@ static ResolveError *ty(Resolver *r, const Type *t)
         emit(r, span(t->span), NS_TYPE, target_syntax());
         return ty(r, t->a);
     case TY_TUPLE:
-        if (t->unboxed) {
-            return unsupported("an unboxed tuple type", &t->span.start);
-        }
         for (i = 0; i < t->items.len; i++) {
             if ((e = ty(r, (const Type *)t->items.items[i])) != NULL) {
                 return e;

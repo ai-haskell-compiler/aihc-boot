@@ -383,8 +383,28 @@ these names:
 - `GHC.Exts`, `GHC.Base` and the other internal modules, with the names
   that the vendored tree imports from them.
 
-The interpreter can still keep an `Int#` as a machine integer, and a
-primop such as `+#` as one builtin. Only the box (`I#`) is new.
+The evaluator keeps the representation simple:
+
+- **Boxes are erased.** A data type with one constructor and one field
+  of a primitive type (a name that ends in `#`), such as
+  `data Int = I# Int#` or `data Ptr a = Ptr Addr#`, is a box. The
+  desugarer erases the constructor as for a newtype, but a match on it
+  evaluates the value. Thus `Int` and `Int#` have the same
+  representation, and one primitive of the evaluator serves both: `+#`
+  and `+` on `Int` are the same builtin.
+- **Unboxed tuples** are constructors of their own in Core, apart from
+  the boxed tuples.
+- **State tokens carry the order of effects.** Core is untyped, so a
+  `case` on an unlifted value, such as
+  `case writeMutVar# r x s of s' -> e`, does not evaluate it. Instead,
+  every primitive on a state token evaluates its token first, and the
+  evaluator evaluates the final token of `main`. The token of a
+  primitive is the result of the primitive before it, so the effects
+  run in program order.
+- **Mutable cells** (`MutVar#`, `MVar#`) are constructor objects whose
+  field the primitives overwrite. The collector copies them as any
+  other object. The evaluator has one thread, so an operation that
+  would block on an `MVar#` is an error.
 
 Take these parts from the aihc libraries:
 

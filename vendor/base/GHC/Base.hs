@@ -1,3 +1,6 @@
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE UnboxedTuples #-}
+
 -- | Basic functions and the classes 'Semigroup', 'Monoid', 'Functor',
 -- 'Applicative' and 'Monad'. A @do@ block desugars to '>>=' and '>>'.
 module GHC.Base
@@ -33,6 +36,7 @@ module GHC.Base
     map,
     (++),
     unIO,
+    realWorld#,
     ord,
     unsafeChr,
   )
@@ -204,8 +208,12 @@ map f (x : xs) = f x : map f xs
 (++) [] ys = ys
 (++) (x : xs) ys = x : (xs ++ ys)
 
-unIO :: IO a -> World -> IORes a
+unIO :: IO a -> State# RealWorld -> (# State# RealWorld, a #)
 unIO (IO m) = m
+
+-- | The state token of the real world. At run time it is the unit value.
+realWorld# :: State# RealWorld
+realWorld# = primUnsafeCoerce ()
 
 ord :: Char -> Int
 ord = primOrd
@@ -277,16 +285,16 @@ instance MonadPlus Maybe
 -- Instances for IO.
 
 instance Functor IO where
-  fmap f (IO m) = IO (\w -> case m w of IORes a -> IORes (f a))
+  fmap f (IO m) = IO (\s -> case m s of (# s', a #) -> (# s', f a #))
 
 instance Applicative IO where
-  pure x = IO (\_ -> IORes x)
+  pure x = IO (\s -> (# s, x #))
   mf <*> mx = mf >>= \f -> mx >>= \x -> pure (f x)
   liftA2 f ma mb = ma >>= \a -> mb >>= \b -> pure (f a b)
   ma *> mb = ma >>= \_ -> mb
 
 instance Monad IO where
-  (IO m) >>= k = IO (\w -> case m w of IORes a -> unIO (k a) w)
+  (IO m) >>= k = IO (\s -> case m s of (# s', a #) -> unIO (k a) s')
 
 instance (Semigroup a) => Semigroup (IO a) where
   (<>) = liftA2 (<>)
