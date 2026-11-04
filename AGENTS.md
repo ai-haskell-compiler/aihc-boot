@@ -82,6 +82,9 @@ Write aihc-boot in ISO C89. The Makefile compiles with
 - Declare variables at the start of a block.
 - Run `make check` before you push. It must pass.
 
+These rules apply to the sources of aihc-boot in `src/`. Vendored C code
+keeps the dialect of its upstream.
+
 ## Workflow
 
 - Do not edit the text between `<!-- progress:start -->` and
@@ -89,5 +92,8 @@ Write aihc-boot in ISO C89. The Makefile compiles with
   writes it.
 - Add all packages to `boot.toml` before you vendor them with
   `scripts/vendor.py`.
+- Keep vendored code as upstream wrote it. Delete code only under the
+  rule in "Upstream code" in [docs/PLAN.md](docs/PLAN.md). Do not
+  rewrite a library to avoid a language feature.
 - The vendored tree must continue to build with GHC. Make sure that
-  `cabal build` succeeds in the dev shell before you push a simplification.
+  `cabal build` succeeds in the dev shell before you push a deletion.
