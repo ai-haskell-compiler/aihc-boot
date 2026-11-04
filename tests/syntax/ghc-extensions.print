@@ -1,0 +1,25 @@
+{-# LANGUAGE MagicHash, UnboxedTuples, TypeFamilies, GADTs #-}
+module GhcExtensions where {
+i2d :: Int# -> Char#;
+i2d i = chr# (ord# '0'# +# i);
+swap :: (# a, b #) -> (# b, a #);
+swap (# a, b #) = (# b, a #);
+unit :: (# #);
+unit = (# #);
+type role Box nominal _;
+data Box a b = Box a;
+data family Vec a :: Type;
+data instance Vec Int = VInt Int Int deriving (Eq);
+newtype instance Vec Bool = VBool Word;
+deriving instance Show (Vec Int);
+deriving newtype instance Eq (Vec Bool);
+class Monad m => MonadState s m | m -> s where {
+  get :: m s};
+type family Mutable (v :: Type -> Type) = (mv :: Type -> Type -> Type) | mv -> v;
+data Step s a where {
+  Yield :: a -> s -> Step s a;
+  Skip, Stop :: Step s a};
+f = do {
+  ar :: Int <- pure 1;
+  pure ar}
+}

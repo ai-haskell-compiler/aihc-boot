@@ -185,6 +185,9 @@ int p_expect_special(Parser *p, int c)
     if (p_eat_special(p, c)) {
         return 0;
     }
+    if (c == SPECIAL_UCLOSE) {
+        return p_unexpected(p, xstrdup("`#)`"));
+    }
     return p_unexpected(p, str_printf("`%c`", c));
 }
 

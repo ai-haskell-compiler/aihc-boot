@@ -209,7 +209,7 @@ int p_at_atype_start(const Parser *p)
     case TOK_CHAR:
         return 1;
     case TOK_SPECIAL:
-        return t->ch == '(' || t->ch == '[';
+        return t->ch == '(' || t->ch == '[' || t->ch == SPECIAL_UOPEN;
     case TOK_KEYWORD:
         return t->ch == KW_UNDERSCORE;
     default:
@@ -419,6 +419,29 @@ Type *p_atype(Parser *p)
         }
         if (tok->ch == '(') {
             return paren_type(p);
+        }
+        if (tok->ch == SPECIAL_UOPEN) {
+            Pos start = p_pos(p);
+            p_bump(p);
+            t = type_new(TY_TUPLE);
+            t->unboxed = 1;
+            if (!p_eat_special(p, SPECIAL_UCLOSE)) {
+                for (;;) {
+                    Type *item = p_ty(p);
+                    if (item == NULL) {
+                        return NULL;
+                    }
+                    vec_push(&t->items, item);
+                    if (!p_eat_special(p, ',')) {
+                        if (p_expect_special(p, SPECIAL_UCLOSE) != 0) {
+                            return NULL;
+                        }
+                        break;
+                    }
+                }
+            }
+            t->span = p_span_from(p, start);
+            return t;
         }
         break;
     default:

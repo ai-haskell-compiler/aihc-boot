@@ -278,7 +278,7 @@ int p_at_apat_start(const Parser *p)
     case TOK_STRING:
         return 1;
     case TOK_SPECIAL:
-        return t->ch == '(' || t->ch == '[';
+        return t->ch == '(' || t->ch == '[' || t->ch == SPECIAL_UOPEN;
     case TOK_KEYWORD:
         return t->ch == KW_UNDERSCORE;
     case TOK_RESERVEDOP:
@@ -464,6 +464,24 @@ Pat *p_apat(Parser *p)
                 return con_pat(name);
             }
             return paren_pat(p);
+        }
+        if (t->ch == SPECIAL_UOPEN) {
+            p_bump(p);
+            r = pat_new(PAT_TUPLE);
+            r->unboxed = 1;
+            if (p_eat_special(p, SPECIAL_UCLOSE)) {
+                return r;
+            }
+            for (;;) {
+                Pat *item = p_pat(p);
+                if (item == NULL) {
+                    return NULL;
+                }
+                vec_push(&r->args, item);
+                if (!p_eat_special(p, ',')) {
+                    return p_expect_special(p, SPECIAL_UCLOSE) == 0 ? r : NULL;
+                }
+            }
         }
         break;
     case TOK_CONID:

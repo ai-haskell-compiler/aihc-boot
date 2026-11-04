@@ -78,6 +78,12 @@ char *token_str(const Token *t)
     case TOK_RESERVEDOP:
         return xstrdup(reservedop_str((int)t->ch));
     case TOK_SPECIAL:
+        if (t->ch == SPECIAL_UOPEN) {
+            return xstrdup("(#");
+        }
+        if (t->ch == SPECIAL_UCLOSE) {
+            return xstrdup("#)");
+        }
         return str_printf("%c", (int)t->ch);
     case TOK_PRAGMA:
         return str_printf("{-#%s#-}", t->text);

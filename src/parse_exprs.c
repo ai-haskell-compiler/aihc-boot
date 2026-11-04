@@ -311,7 +311,7 @@ static int at_aexp_start(const Parser *p)
     case TOK_STRING:
         return 1;
     case TOK_SPECIAL:
-        return t->ch == '(' || t->ch == '[';
+        return t->ch == '(' || t->ch == '[' || t->ch == SPECIAL_UOPEN;
     case TOK_KEYWORD:
         return t->ch == KW_UNDERSCORE;
     default:
@@ -443,6 +443,29 @@ static Expr *aexp1(Parser *p)
                 return name_expr(EXPR_CON, name);
             }
             return bracket_exp(p);
+        }
+        if (t->ch == SPECIAL_UOPEN) {
+            Pos start = p_pos(p);
+            p_bump(p);
+            e = expr_new(EXPR_TUPLE);
+            e->unboxed = 1;
+            if (!p_eat_special(p, SPECIAL_UCLOSE)) {
+                for (;;) {
+                    Expr *item = p_exp(p);
+                    if (item == NULL) {
+                        return NULL;
+                    }
+                    vec_push(&e->items, item);
+                    if (!p_eat_special(p, ',')) {
+                        if (p_expect_special(p, SPECIAL_UCLOSE) != 0) {
+                            return NULL;
+                        }
+                        break;
+                    }
+                }
+            }
+            e->span = p_span_from(p, start);
+            return e;
         }
         break;
     default:
@@ -726,6 +749,13 @@ static Stmt *p_stmt1(Parser *p)
     if (bind_arrow_ahead(p)) {
         s->kind = STMT_BIND;
         s->pat = p_pat(p);
+        if (s->pat != NULL && p_eat_op(p, OP_DOUBLECOLON)) {
+            /* A pattern with a signature: `x :: t <- e`. */
+            Pat *sig = pat_new(PAT_SIG);
+            sig->a = s->pat;
+            sig->ty = p_ty(p);
+            s->pat = sig->ty != NULL ? sig : NULL;
+        }
         if (s->pat == NULL || p_expect_op(p, OP_LEFTARROW, "`<-`") != 0) {
             return NULL;
         }

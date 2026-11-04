@@ -98,6 +98,7 @@ stripPragmas =
   where
     isDeclPragma :: Decl -> Bool
     isDeclPragma (DeclPragma _) = True
+    isDeclPragma (DeclRules _) = True
     isDeclPragma _ = False
 
     isClassPragma :: ClassDeclItem -> Bool
