@@ -17,25 +17,40 @@ library
   default-extensions: NoImplicitPrelude
 
   exposed-modules:
+    Control.Applicative
     Control.Exception
     Control.Monad
+    Control.Monad.Fail
+    Control.Monad.Fix
+    Control.Monad.IO.Class
     Control.Monad.ST
     Control.Monad.ST.Unsafe
+    Data.Bifunctor
     Data.Bits
+    Data.Bool
     Data.Char
     Data.Either
+    Data.Eq
     Data.Foldable
+    Data.Function
     Data.Functor
+    Data.Functor.Const
+    Data.Functor.Identity
     Data.Int
+    Data.Kind
     Data.List
     Data.List.NonEmpty
     Data.Maybe
+    Data.Monoid
+    Data.Ord
+    Data.Proxy
     Data.Semigroup
     Data.String
     Data.Traversable
     Data.Tuple
     Data.Typeable
     Data.Typeable.Internal
+    Data.Void
     Data.Word
     Foreign
     Foreign.C.Types
@@ -71,3 +86,4 @@ library
     Prelude
     System.IO
     System.IO.Unsafe
+    Text.Show

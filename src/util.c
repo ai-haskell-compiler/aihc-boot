@@ -540,6 +540,23 @@ int uc_is_uppercase(unsigned long c)
     return in_table(c, uc_upper, uc_upper_len);
 }
 
+int uc_general_category(unsigned long c)
+{
+    unsigned long lo = 0;
+    unsigned long hi = uc_category_len;
+    while (lo < hi) {
+        unsigned long mid = lo + (hi - lo) / 2;
+        if (c < uc_category[mid][0]) {
+            hi = mid;
+        } else if (c > uc_category[mid][1]) {
+            lo = mid + 1;
+        } else {
+            return (int)uc_category[mid][2];
+        }
+    }
+    return 29;
+}
+
 int uc_is_control(unsigned long c)
 {
     return c < 0x20 || (c >= 0x7F && c <= 0x9F);

@@ -9,5 +9,7 @@ extern const unsigned long uc_numeric[][2];
 extern const unsigned long uc_numeric_len;
 extern const unsigned long uc_upper[][2];
 extern const unsigned long uc_upper_len;
+extern const unsigned long uc_category[][3];
+extern const unsigned long uc_category_len;
 
 #endif
