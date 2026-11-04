@@ -13,6 +13,7 @@ module GHC.Types
     IORes (..),
     World,
     Type,
+    Constraint,
   )
 where
 
@@ -47,3 +48,6 @@ data World
 
 -- | The kind of ordinary types.
 data Type
+
+-- | The kind of class constraints.
+data Constraint

@@ -3,6 +3,12 @@ module Control.Monad
   ( Functor (..),
     Applicative (..),
     Monad (..),
+    MonadPlus (..),
+    MonadFail (..),
+    guard,
+    mfilter,
+    msum,
+    mapAndUnzipM,
     mapM,
     mapM_,
     forM,
@@ -31,11 +37,12 @@ module Control.Monad
   )
 where
 
+import Control.Monad.Fail (MonadFail (..))
 import Data.Foldable
 import Data.Traversable
 import GHC.Base
 import GHC.Classes
-import GHC.List (zipWith)
+import GHC.List (unzip, zipWith)
 import GHC.Num
 import GHC.Prim (seq)
 import GHC.Types
@@ -83,3 +90,17 @@ filterM p = GHC.Base.foldr (\x -> liftA2 (\flg -> if flg then (x :) else id) (p 
 
 (<$!>) :: (Monad m) => (a -> b) -> m a -> m b
 f <$!> m = m >>= \x -> let z = f x in z `seq` return z
+
+-- | Fail with 'empty' unless the condition holds.
+guard :: (Alternative f) => Bool -> f ()
+guard True = pure ()
+guard False = empty
+
+-- | Keep the result only when it satisfies the predicate.
+mfilter :: (MonadPlus m) => (a -> Bool) -> m a -> m a
+mfilter p ma = do
+  a <- ma
+  if p a then return a else mzero
+
+mapAndUnzipM :: (Applicative m) => (a -> m (b, c)) -> [a] -> m ([b], [c])
+mapAndUnzipM f xs = unzip <$> traverse f xs

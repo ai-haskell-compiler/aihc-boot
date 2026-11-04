@@ -2,6 +2,9 @@
 -- value.
 module Data.Foldable
   ( Foldable (..),
+    Endo (..),
+    asum,
+    msum,
     foldrM,
     foldlM,
     traverse_,
@@ -35,10 +38,7 @@ import GHC.Types
 infix 4 `elem`, `notElem`
 
 -- | The monoid of endomorphisms under composition.
-newtype Endo a = Endo (a -> a)
-
-appEndo :: Endo a -> a -> a
-appEndo (Endo f) = f
+newtype Endo a = Endo {appEndo :: a -> a}
 
 instance Semigroup (Endo a) where
   Endo f <> Endo g = Endo (f . g)
@@ -169,3 +169,11 @@ find :: (Foldable t) => (a -> Bool) -> t a -> Maybe a
 find p t = case List.filter p (toList t) of
   [] -> Nothing
   (x : _) -> Just x
+
+-- | The sum of a collection of actions, with '<|>'.
+asum :: (Foldable t, Alternative f) => t (f a) -> f a
+asum = foldr (<|>) empty
+
+-- | The sum of a collection of actions, with 'mplus'.
+msum :: (Foldable t, MonadPlus m) => t (m a) -> m a
+msum = asum

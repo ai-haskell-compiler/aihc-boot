@@ -88,6 +88,11 @@ module Data.List
     insert,
     insertBy,
     genericLength,
+    mapAccumL,
+    mapAccumR,
+    dropWhileEnd,
+    subsequences,
+    permutations,
   )
 where
 
@@ -271,3 +276,46 @@ zip4 _ _ _ _ = []
 genericLength :: (Num i) => [a] -> i
 genericLength [] = 0
 genericLength (_ : l) = 1 + genericLength l
+
+-- | A map that threads an accumulator from the left.
+mapAccumL :: (acc -> x -> (acc, y)) -> acc -> [x] -> (acc, [y])
+mapAccumL _ s [] = (s, [])
+mapAccumL f s (x : xs) = (s'', y : ys)
+  where
+    (s', y) = f s x
+    (s'', ys) = mapAccumL f s' xs
+
+-- | A map that threads an accumulator from the right.
+mapAccumR :: (acc -> x -> (acc, y)) -> acc -> [x] -> (acc, [y])
+mapAccumR _ s [] = (s, [])
+mapAccumR f s (x : xs) = (s'', y : ys)
+  where
+    (s'', y) = f s' x
+    (s', ys) = mapAccumR f s xs
+
+-- | Drop the longest suffix whose elements satisfy the predicate.
+dropWhileEnd :: (a -> Bool) -> [a] -> [a]
+dropWhileEnd p = foldr (\x xs -> if p x && null xs then [] else x : xs) []
+
+-- | All subsequences, in the order of GHC's base.
+subsequences :: [a] -> [[a]]
+subsequences xs = [] : nonEmptySubsequences xs
+
+nonEmptySubsequences :: [a] -> [[a]]
+nonEmptySubsequences [] = []
+nonEmptySubsequences (x : xs) = [x] : foldr f [] (nonEmptySubsequences xs)
+  where
+    f ys r = ys : (x : ys) : r
+
+-- | All permutations, in the order of GHC's base.
+permutations :: [a] -> [[a]]
+permutations xs0 = xs0 : perms xs0 []
+  where
+    perms [] _ = []
+    perms (t : ts) is' = foldr interleave (perms ts (t : is')) (permutations is')
+      where
+        interleave xs r = let (_, zs) = interleave' id xs r in zs
+        interleave' _ [] r = (ts, r)
+        interleave' f (y : ys) r =
+          let (us, zs) = interleave' (f . (y :)) ys r
+           in (y : us, f (t : y : us) : zs)

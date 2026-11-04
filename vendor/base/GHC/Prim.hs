@@ -30,6 +30,7 @@ module GHC.Prim
     primCharGe,
     primOrd,
     primChr,
+    primGeneralCategory,
     primIntShow,
     primPutChar,
     primGetChar,
@@ -133,6 +134,10 @@ foreign import prim "charGe" primCharGe :: Char -> Char -> Bool
 foreign import prim "ord" primOrd :: Char -> Int
 
 foreign import prim "chr" primChr :: Int -> Char
+
+-- | The index of the general category of a character in
+-- Data.Char.GeneralCategory.
+foreign import prim "generalCategory" primGeneralCategory :: Char -> Int
 
 -- | The decimal digits of an integer, with a minus sign when negative.
 foreign import prim "intShow" primIntShow :: Int -> [Char]

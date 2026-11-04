@@ -1,0 +1,2 @@
+[LowercaseLetter,UppercaseLetter,DecimalNumber,Space,LowercaseLetter,LineSeparator,OtherPunctuation,CurrencySymbol]
+([True,False,True],True,True,True)

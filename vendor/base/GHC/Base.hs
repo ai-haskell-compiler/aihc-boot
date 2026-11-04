@@ -7,6 +7,8 @@ module GHC.Base
     Functor (..),
     Applicative (..),
     Monad (..),
+    Alternative (..),
+    MonadPlus (..),
     NonEmpty (..),
     (<$>),
     (=<<),
@@ -55,6 +57,8 @@ infixl 1 >>=, >>
 infixr 1 =<<
 
 infixl 4 <$>, <$, <*>, *>, <*
+
+infixl 3 <|>
 
 infixr 6 <>
 
@@ -107,6 +111,22 @@ class (Applicative m) => Monad m where
   return :: a -> m a
   m >> k = m >>= \_ -> k
   return = pure
+
+-- | A monoid on applicative functors.
+class (Applicative f) => Alternative f where
+  empty :: f a
+  (<|>) :: f a -> f a -> f a
+  some :: f a -> f [a]
+  many :: f a -> f [a]
+  some v = liftA2 (:) v (many v)
+  many v = some v <|> pure []
+
+-- | Monads that also support choice and failure.
+class (Alternative m, Monad m) => MonadPlus m where
+  mzero :: m a
+  mplus :: m a -> m a -> m a
+  mzero = empty
+  mplus = (<|>)
 
 (<$>) :: (Functor f) => (a -> b) -> f a -> f b
 (<$>) = fmap
@@ -214,6 +234,12 @@ instance Applicative [] where
 instance Monad [] where
   xs >>= f = [y | x <- xs, y <- f x]
 
+instance Alternative [] where
+  empty = []
+  (<|>) = (++)
+
+instance MonadPlus []
+
 -- Instances for Maybe.
 
 instance (Semigroup a) => Semigroup (Maybe a) where
@@ -240,6 +266,13 @@ instance Applicative Maybe where
 instance Monad Maybe where
   (Just x) >>= k = k x
   Nothing >>= _ = Nothing
+
+instance Alternative Maybe where
+  empty = Nothing
+  Nothing <|> r = r
+  l <|> _ = l
+
+instance MonadPlus Maybe
 
 -- Instances for IO.
 
