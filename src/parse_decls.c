@@ -265,6 +265,7 @@ static Decl *pat_syn(Parser *p)
     name = conid(p);
     if (name != NULL) {
         d->patsyn.name = name->name;
+        d->patsyn.name_span = name->span;
         if (p_eat_special(p, '{')) {
             d->patsyn.kind = PATSYN_RECORD;
             if (!p_at_special(p, '}')) {
@@ -302,6 +303,7 @@ static Decl *pat_syn(Parser *p)
         d->patsyn.kind = PATSYN_INFIX;
         d->patsyn.left = left->name;
         t = p_peek(p);
+        d->patsyn.name_span = p_token_span(p);
         if (t->kind == TOK_CONSYM && t->qual[0] == '\0') {
             d->patsyn.name = xstrdup(t->text);
             p_bump(p);
@@ -316,6 +318,7 @@ static Decl *pat_syn(Parser *p)
                 return NULL;
             }
             d->patsyn.name = str_printf("`%s`", c->name);
+            d->patsyn.name_span = c->span;
         } else {
             p_unexpected(p, "a constructor operator");
             return NULL;

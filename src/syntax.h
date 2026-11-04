@@ -403,6 +403,7 @@ typedef enum {
 typedef struct {
     PatSynLhsKind kind;
     char *name;  /* the operator for PATSYN_INFIX */
+    Span name_span; /* the name as written, without backquotes */
     Vec args;    /* char *: arguments or fields */
     char *left;
     char *right;
