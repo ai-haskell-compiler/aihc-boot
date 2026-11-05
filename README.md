@@ -15,54 +15,63 @@ Updated daily by [a scheduled workflow](.github/workflows/progress.yml);
 history in [progress/history.csv](progress/history.csv).
 
 <!-- progress:start -->
-_Last change in progress: 2026-11-03. Boot compiler: built._
+_Last change in progress: 2026-11-05. Boot compiler: built._
 
 | Milestone | Done | Progress |
 | --- | ---: | --- |
-| **M1** Vendor | 11/19 | `██████░░░░` 57.9% |
-| **M2** Prune | 1/20 | `░░░░░░░░░░` 5.0% |
-| **M3** Parse | 287/287 | `██████████` 100.0% |
-| **M4** Resolve | 86/287 | `███░░░░░░░` 30.0% |
-| **M5** Typecheck | 86/287 | `███░░░░░░░` 30.0% |
-| **M6** Eval | 15/15 | `██████████` 100.0% |
+| **M1** Vendor | 29/29 | `██████████` 100.0% |
+| **M2** Prune | 1/19 | `█░░░░░░░░░` 5.3% |
+| **M3** Parse | 527/528 | `██████████` 99.8% |
+| **M4** Resolve | 136/528 | `███░░░░░░░` 25.8% |
+| **M5** Typecheck | 128/528 | `██░░░░░░░░` 24.2% |
+| **M6** Eval | 17/17 | `██████████` 100.0% |
 | **M7** Stage 1 | — | `░░░░░░░░░░` 0.0% |
 
 <details><summary>Per-package breakdown</summary>
 
 | Package | Plan | Status | Modules | Lines (upstream → now) | Parse | Resolve | Typecheck | Eval |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| aihc | keep | vendored | 94 | 46705 → 46705 | 94/94 | 1/94 | 1/94 | — |
+| aihc | keep | vendored | 94 | 46705 → 46705 | 94/94 | 2/94 | 1/94 | — |
 | aihc-resolve | keep | vendored | 8 | 4106 → 4106 | 8/8 | 0/8 | 0/8 | — |
 | aihc-tc | keep | vendored | 54 | 22234 → 22234 | 54/54 | 0/54 | 0/54 | — |
 | aihc-package-plan | keep | vendored | 5 | 2025 → 2025 | 5/5 | 0/5 | 0/5 | — |
-| aihc-hackage | simplify | not vendored |  |  |  |  |  | — |
+| aihc-hackage | simplify | vendored | 11 | 2226 → 2226 | 11/11 | 2/11 | 2/11 | — |
 | aihc-parser | keep | vendored | 28 | 17315 → 17315 | 28/28 | 0/28 | 0/28 | — |
 | aihc-cpp | keep | vendored | 6 | 2376 → 2376 | 6/6 | 1/6 | 1/6 | — |
-| base | replace | vendored | 54 | 4487 | 54/54 | 54/54 | 54/54 | 13/13 |
+| base | replace | vendored | 74 | 5854 | 74/74 | 74/74 | 74/74 | 15/15 |
 | ghc-prim | replace | not vendored |  |  |  |  |  | — |
-| containers | simplify | vendored | 6 | 22364 → 614 | 6/6 | 0/6 | 0/6 | — |
+| containers | simplify | vendored | 6 | 22364 → 614 | 6/6 | 6/6 | 6/6 | — |
 | text | simplify | vendored | 14 | 20301 → 1040 | 14/14 | 14/14 | 14/14 | 2/2 |
 | bytestring | simplify | vendored | 15 | 15180 → 2548 | 15/15 | 15/15 | 15/15 | — |
 | deepseq | simplify | vendored | 1 | 936 → 72 | 1/1 | 1/1 | 1/1 | — |
-| transformers | simplify | not vendored |  |  |  |  |  | — |
-| array | simplify | not vendored |  |  |  |  |  | — |
-| binary | simplify | not vendored |  |  |  |  |  | — |
-| filepath | simplify | vendored | 2 | 3156 → 214 | 2/2 | 0/2 | 0/2 | — |
+| transformers | simplify | vendored | 24 | 5319 → 5319 | 24/24 | 6/24 | 1/24 | — |
+| array | simplify | vendored | 15 | 2620 → 2620 | 15/15 | 0/15 | 0/15 | — |
+| binary | simplify | vendored | 9 | 2820 → 2820 | 9/9 | 1/9 | 1/9 | — |
+| filepath | simplify | vendored | 2 | 3156 → 214 | 2/2 | 2/2 | 2/2 | — |
 | directory | replace | not vendored |  |  |  |  |  | — |
 | process | replace | not vendored |  |  |  |  |  | — |
 | unix | drop | still used | | | | | | |
 | time | drop | still used | | | | | | |
-| stm | drop | still used | | | | | | |
+| stm | simplify | vendored | 10 | 1282 → 1282 | 10/10 | 0/10 | 0/10 | — |
 | async | drop | still used | | | | | | |
-| megaparsec | simplify | not vendored |  |  |  |  |  | — |
-| prettyprinter | simplify | not vendored |  |  |  |  |  | — |
+| megaparsec | simplify | vendored | 19 | 5541 → 5541 | 19/19 | 0/19 | 0/19 | — |
+| prettyprinter | simplify | vendored | 28 | 3662 → 3592 | 28/28 | 1/28 | 0/28 | — |
+| mtl | simplify | vendored | 24 | 2607 → 2607 | 24/24 | 1/24 | 0/24 | — |
+| parser-combinators | simplify | vendored | 7 | 1124 → 1124 | 7/7 | 5/7 | 5/7 | — |
+| case-insensitive | simplify | vendored | 3 | 205 → 205 | 3/3 | 0/3 | 0/3 | — |
+| scientific | simplify | vendored | 5 | 1227 → 1223 | 5/5 | 0/5 | 0/5 | — |
+| hashable | simplify | vendored | 10 | 1541 → 1541 | 10/10 | 2/10 | 2/10 | — |
+| integer-logarithms | simplify | vendored | 4 | 510 → 510 | 4/4 | 2/4 | 2/4 | — |
+| os-string | simplify | vendored | 12 | 3820 → 3712 | 11/12 | 0/12 | 0/12 | — |
+| exceptions | simplify | vendored | 2 | 957 → 954 | 2/2 | 0/2 | 0/2 | — |
+| vector-stream | simplify | vendored | 1 | 1448 → 1448 | 1/1 | 0/1 | 0/1 | — |
 | Cabal-syntax | replace | not vendored |  |  |  |  |  | — |
 | Cabal | drop | still used | | | | | | |
 | aeson | replace | not vendored |  |  |  |  |  | — |
 | optparse-applicative | replace | not vendored |  |  |  |  |  | — |
 | cryptohash-sha256 | replace | not vendored |  |  |  |  |  | — |
-| vector | simplify | not vendored |  |  |  |  |  | — |
-| primitive | simplify | not vendored |  |  |  |  |  | — |
+| vector | simplify | vendored | 23 | 19297 → 19297 | 23/23 | 1/23 | 1/23 | — |
+| primitive | simplify | vendored | 14 | 5044 → 5000 | 14/14 | 0/14 | 0/14 | — |
 | haskeline | drop | still used | | | | | | |
 | libffi | drop | still used | | | | | | |
 | http-client | drop | still used | | | | | | |
